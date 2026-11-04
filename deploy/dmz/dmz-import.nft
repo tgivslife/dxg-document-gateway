@@ -1,0 +1,22 @@
+#!/usr/sbin/nft -f
+flush ruleset
+
+define EXT_CORE = 10.10.10.10
+define INT_CORE = 10.20.10.10
+
+table inet filter {
+    chain input {
+        type filter hook input priority 0; policy drop;
+        iif "lo" accept
+        ct state established,related accept
+        ip saddr { $EXT_CORE, $INT_CORE } tcp dport 22 ct state new accept
+    }
+    chain forward {
+        type filter hook forward priority 0; policy drop;
+    }
+    chain output {
+        type filter hook output priority 0; policy drop;
+        oif "lo" accept
+        ct state established,related accept
+    }
+}

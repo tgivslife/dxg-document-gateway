@@ -1,0 +1,134 @@
+name: dxg-poc
+
+x-app: &app
+  restart: unless-stopped
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+
+services:
+  ext-app:
+    <<: *app
+    image: dxg/ext-app:poc
+    ports: ["127.0.0.1:8080:8080"]
+    networks: [ext-core, ext-sanitize, ext-validate, ext-updates, ext-to-import, ext-to-export]
+    volumes:
+      - ./folders/intake:/srv/dxg/intake
+      - ext-evidence:/srv/dxg/evidence
+      - ./folders/outtake:/srv/dxg/outtake
+    secrets: [ext_package_sign, sftp_ext, agent_ext]
+
+  ext-release:
+    <<: *app
+    image: dxg/ext-release:poc
+    networks: [ext-core, ext-check]
+    volumes:
+      - ext-evidence:/srv/dxg/evidence:ro
+      - ./folders/outtake:/srv/dxg/outtake
+    secrets: [ext_release_enc]
+
+  ext-postgres:
+    image: postgres:16
+    restart: unless-stopped
+    networks: [ext-core]
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/ext_db_password
+    volumes: [ext-db:/var/lib/postgresql/data]
+    secrets: [ext_db_password]
+
+  ext-validator:
+    <<: *app
+    image: dxg/dss:poc
+    networks: [ext-validate, ext-trust-incoming]
+
+  ext-response-validator:
+    <<: *app
+    image: dxg/dss:poc
+    networks: [ext-check, ext-trust-responses]
+
+  ext-egress:
+    image: dxg/squid:poc
+    restart: unless-stopped
+    networks: [ext-updates, ext-trust-incoming, ext-trust-responses, outside]
+
+  dmz-import:
+    image: dxg/sftp:poc
+    restart: unless-stopped
+    networks: [ext-to-import, int-to-import]
+    volumes: [dmz-import:/srv/xfer]
+
+  dmz-export:
+    image: dxg/sftp:poc
+    restart: unless-stopped
+    networks: [ext-to-export, int-to-export]
+    volumes: [dmz-export:/srv/xfer]
+
+  int-app:
+    <<: *app
+    image: dxg/int-app:poc
+    ports: ["127.0.0.1:8081:8080"]
+    networks: [int-core, int-sanitize, int-validate, int-to-import, int-to-export]
+    volumes: [int-documents:/srv/dxg/documents]
+    secrets: [int_package_sign, int_import_enc, sftp_int, agent_int]
+
+  int-postgres:
+    image: postgres:16
+    restart: unless-stopped
+    networks: [int-core]
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/int_db_password
+    volumes: [int-db:/var/lib/postgresql/data]
+    secrets: [int_db_password]
+
+  int-validator:
+    <<: *app
+    image: dxg/dss:poc
+    networks: [int-validate]
+
+networks:
+  outside: {}
+  ext-core: { internal: true }
+  ext-validate: { internal: true }
+  ext-check: { internal: true }
+  ext-updates: { internal: true }
+  ext-trust-incoming: { internal: true }
+  ext-trust-responses: { internal: true }
+  ext-to-import: { internal: true }
+  ext-to-export: { internal: true }
+  int-to-import: { internal: true }
+  int-to-export: { internal: true }
+  int-core: { internal: true }
+  int-validate: { internal: true }
+  ext-sanitize:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.name: br-ext-san
+    ipam:
+      config: [{ subnet: 172.30.10.0/24 }]
+  int-sanitize:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.name: br-int-san
+    ipam:
+      config: [{ subnet: 172.30.20.0/24 }]
+
+volumes:
+  ext-evidence: {}
+  ext-db: {}
+  int-db: {}
+  int-documents: {}
+  dmz-import: {}
+  dmz-export: {}
+
+secrets:
+  ext_package_sign: { file: ./secrets/ext-package-sign.pem }
+  ext_release_enc: { file: ./secrets/ext-release-enc.pem }
+  ext_db_password: { file: ./secrets/ext-db-password }
+  sftp_ext: { file: ./secrets/sftp-ext }
+  agent_ext: { file: ./secrets/agent-ext }
+  int_package_sign: { file: ./secrets/int-package-sign.pem }
+  int_import_enc: { file: ./secrets/int-import-enc.pem }
+  int_db_password: { file: ./secrets/int-db-password }
+  sftp_int: { file: ./secrets/sftp-int }
+  agent_int: { file: ./secrets/agent-int }

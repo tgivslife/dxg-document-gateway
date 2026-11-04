@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dxg:envelope:1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "package_id", "type", "seq", "request_id", "created_at"],
+  "properties": {
+    "schema": { "const": "dxg-envelope/1" },
+    "package_id": { "type": "string", "format": "uuid" },
+    "type": { "enum": ["import", "response", "ack", "status"] },
+    "seq": { "type": "integer", "minimum": 1 },
+    "request_id": { "type": "string", "format": "uuid" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "payload_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "payload_bytes": { "type": "integer", "minimum": 1 },
+    "sensitivity": { "enum": ["normal", "sensitive"] },
+    "response_version": { "type": "integer", "minimum": 1 },
+    "ack_package_id": { "type": "string", "format": "uuid" },
+    "ack_result": { "enum": ["accepted", "rejected"] },
+    "ack_reason": { "enum": ["signature", "schema", "sequence", "hash", "pdf_policy", "request_state", "feature_disabled"] },
+    "status": { "enum": ["released", "expired", "bounced"] }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "import" } } },
+      "then": { "required": ["payload_sha256", "payload_bytes"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "response" } } },
+      "then": { "required": ["payload_sha256", "payload_bytes", "sensitivity", "response_version"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "ack" } } },
+      "then": { "required": ["ack_package_id", "ack_result"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "status" } } },
+      "then": { "required": ["status"] }
+    }
+  ]
+}

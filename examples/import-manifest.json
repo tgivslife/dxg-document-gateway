@@ -1,0 +1,31 @@
+{
+  "schema": "dxg-import/1",
+  "request_id": "0195f7a2-6f7e-7c1a-9a44-1b1f4c2e7d10",
+  "received_at": "2026-11-04T09:12:44Z",
+  "sender": "person@example.org",
+  "subject": "Request for approval",
+  "body": {
+    "file": "body.txt",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "documents": [
+    {
+      "item_id": "0195f7a2-71c0-7a35-8f42-2f8e9d3a1c55",
+      "display_name": "contract.pdf",
+      "file": "documents/000001.pdf",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "source_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "source_type": "pdf",
+      "converter": "dangerzone 0.11.1",
+      "signature": {
+        "state": "passed",
+        "signed_by": "Example Signer",
+        "level": "QESig",
+        "signing_time": "2026-11-03T15:20:01Z",
+        "validated_at": "2026-11-04T09:30:10Z",
+        "validator": "EU DSS 6.5.1",
+        "report": "reports/000001.etsi.xml"
+      }
+    }
+  ]
+}
