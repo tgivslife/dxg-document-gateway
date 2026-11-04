@@ -1,0 +1,45 @@
+# IDE and editor settings
+.idea/
+*.iml
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Secrets: package keys, SSH keys, certificates and passwords (design doc, section 11)
+secrets/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# POC runtime data: the intake and outtake folders hold test documents
+# and decrypted responses (design doc, section 10.8)
+folders/
+
+# Dependencies and build output: Laravel, Vue, Python agent
+vendor/
+node_modules/
+dist/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Test and tool caches
+.phpunit.result.cache
+.pytest_cache/
+coverage/
+
+# Logs
+*.log
+
+# Copies of the doc rendered with mermaid-cli
+*-rendered.md
+*-rendered-*.png
+*-rendered-*.svg
