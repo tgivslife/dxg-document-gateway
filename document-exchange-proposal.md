@@ -39,7 +39,8 @@ flowchart TB
     end
 
     subgraph EXT["External network"]
-        CORE["<b>ext-app, ext-release</b><br/>Console and workflow.<br/>Holds package keys."]
+        CORE["<b>ext-app</b><br/>Console and workflow.<br/>Reachable from the wired<br/>campus network only."]
+        REL["<b>ext-release</b><br/>Decrypts a response at release.<br/>Own server, holds the release key."]
         ADAPTER["<b>Mail adapter (MVP)</b><br/>Fetches and sends mail.<br/>Hands files to ext-app."]
         SAN[["<b>ext-sanitizer VM</b><br/>Opens untrusted files,<br/>flattens them to PDF.<br/>No keys, no network."]]
         VAL["<b>Signature validators</b><br/>EU DSS, two instances.<br/>Internet only via a proxy"]
@@ -60,7 +61,10 @@ flowchart TB
     CORE --> EXP
     CORE --> SAN
     CORE --> VAL
-    ADAPTER -. "intake and outtake folders" .- CORE
+    ADAPTER -. "intake folder" .- CORE
+    ADAPTER -. "outtake folder" .- REL
+    CORE --> REL
+    REL --> VAL
     ADAPTER --> MAIL
     VAL --> TRUST
 
@@ -70,7 +74,7 @@ flowchart TB
     classDef part fill:#eef0fb,stroke:#7b7fc4,color:#1f1f1f
     classDef vm fill:#fbe3d9,stroke:#c8642e,stroke-width:2px,color:#1f1f1f
     classDef dmz fill:#dbe8f7,stroke:#3b6fc4,stroke-width:2px,color:#1f1f1f
-    class MAIL,TRUST,ADAPTER,CORE,VAL,IAPP,IVAL,IVER part
+    class MAIL,TRUST,ADAPTER,CORE,REL,VAL,IAPP,IVAL,IVER part
     class SAN,ISAN vm
     class IMP,EXP dmz
     style NET fill:#f3f3f3,stroke:#9a9a9a
@@ -79,7 +83,7 @@ flowchart TB
     style INT fill:#ebf5ec,stroke:#7fbf8a
 ```
 
-The core servers are the two application servers: ext-app with ext-release on the external network, and int-app on the internal network. Each core server talks only to its own isolated helpers and to the DMZ. On the internal network, a separate verifier collects what arrives from the DMZ, so the server that holds the internal documents never parses a package itself. Nothing on the external side or in the DMZ can open a connection to the internal network.
+The core servers are the two application servers: ext-app on the external network and int-app on the internal network. ext-release, which decrypts a response at release, runs on its own server. Each core server talks only to its own isolated helpers and to the DMZ. On the internal network, a separate verifier collects what arrives from the DMZ, so the server that holds the internal documents never parses a package itself. Nothing on the external side or in the DMZ can open a connection to the internal network.
 
 **Incoming request, external network to internal network**
 
@@ -121,8 +125,8 @@ Each part does one job, and the parts that open untrusted files hold no keys and
 
 | Component | Network | What it does | Runs |
 | --- | --- | --- | --- |
-| ext-app | External | Console for operators and release officers. Runs intake, workflow and packaging. Holds the key that signs packages. | Laravel and Vue web app, OpenSSL |
-| ext-release | External | Decrypts an approved response at release and hands it to the outgoing channel. Only holder of the release decryption key. | Small service, OpenSSL |
+| ext-app | External | Console for operators and release officers, reachable only from the wired campus network. Runs intake, workflow and packaging. Holds the key that signs packages. | Laravel and Vue web app, OpenSSL |
+| ext-release | External, own server | Decrypts an approved response at release and hands it to the outgoing channel. Only holder of the release decryption key and of the outtake folder, so decrypted responses never sit on the ext-app server. | Small service, OpenSSL |
 | ext-sanitizer | External, isolated VM | The only place untrusted files are opened: parses email, detects file types, scans, checks macros, unpacks ZIPs and flattens documents to PDF. No keys, no outbound network, reset daily. | Python agent, Magika, ClamAV, oletools, Dangerzone |
 | ext-validator | External, isolated | Validates signatures on incoming signed PDFs against the EU trusted lists. | EU DSS |
 | ext-response-validator | External, isolated | Checks the qualified signature and timestamp of each response at release. Never sees files from the internet. | EU DSS |
@@ -168,7 +172,7 @@ The cost is fidelity. Flattened PDFs keep a document's look but lose formulas, l
 
 ## Remaining risks and known gaps
 
-Five risks remain by design. A design review also found twelve open issues. The four most serious are listed here and must be closed before the proof of concept. The [technical design](document-exchange-mvp-technical-documentation.md) lists all twelve in section 12.2.
+Five risks remain by design. A design review also found thirteen open issues. The four most serious are listed here and must be closed before the proof of concept. The [technical design](document-exchange-mvp-technical-documentation.md) lists all thirteen in section 12.2.
 
 | Remaining risk | What limits it |
 | --- | --- |
@@ -176,7 +180,7 @@ Five risks remain by design. A design review also found twelve open issues. The 
 | A software boundary, not a hardware data diode | Not proposed for classified networks without review. A hardware diode can replace the DMZ transfer later without changing the package format. |
 | The internal network trusts signature checks made on the external side | The validation report is signed into the package, and the original stays in the evidence store. |
 | Data hidden in page images on the way out | DLP reads text only. Flattening, size limits, a second approver and no recipient control on the internal network reduce the channel. |
-| A compromised external core server | It can read the mailbox and queued imports. Responses stay encrypted until release, the internal network verifies every package, and the signing key can be revoked. |
+| A compromised external core server | It can read the mailbox and queued imports. It can also record false approvals, and so release a waiting response to a recipient of its choice. It cannot change a response, and it cannot read the release key or a decrypted response, which sit on a separate server. The console is reachable only from the wired campus network, the internal network verifies every package, and the signing key can be revoked. |
 
 | Known gap | Proposed fix |
 | --- | --- |

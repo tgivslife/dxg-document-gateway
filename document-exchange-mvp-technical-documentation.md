@@ -69,7 +69,7 @@ Section 2.2 turns these rules into security requirements. Section 3.6 defines on
 | Internal network, internal side | The intranet, with no internet access, and the DXG components on it |
 | DMZ | A separate network zone between the two networks. It holds only packages |
 | `ext-app`, `int-app` | The web application on each side. This document names the application when it describes work, such as building a package |
-| `ext-core`, `int-core` | The stack, and in the MVP the VM, that runs the application with its database. `ext-core` also runs `ext-release`. This document names the stack when it describes a host, such as in the flow matrix |
+| `ext-core`, `int-core` | The stack, and in the MVP the VM, that runs the application with its database. This document names the stack when it describes a host, such as in the flow matrix |
 | Container | A long-running Docker container, started from a pinned image |
 | Stack | A group of containers that work together, such as `ext-core` |
 | Sandbox | A short-lived container created for one document. Dangerzone starts these inside its VM |
@@ -161,6 +161,8 @@ Each requirement has an ID that stays the same when this document changes. The s
 | SR-13 | A signed response must be the approved PDF with only signature data added |
 | SR-14 | Decrypted responses never reach a validator that parses hostile files |
 | SR-15 | On the internal side, packages from the DMZ are collected, parsed and decrypted only by a component that has no console, no database and no response signing key |
+| SR-16 | The key that decrypts responses, and every decrypted response, stay off the host that runs the external web application |
+| SR-17 | The external console is reachable only from workstations on the wired campus network |
 
 ## 3. How it works
 
@@ -600,7 +602,7 @@ This diagram shows every component and allowed connection in the POC.
 - **Rounded boxes are outside DXG**, such as services that DXG uses but does not manage.
 - **Hexagons are people** using a console.
 - **Each arrow** points from the side that opens the connection. Its label starts with the flow ID from section 5.1 and says what the connection is for.
-- **The dotted line** is the hand-off through the intake and outtake folders, which has no network connection.
+- **The dotted lines** are the hand-offs through the intake and outtake folders, which have no network connection.
 
 ```mermaid
 flowchart TB
@@ -617,7 +619,8 @@ flowchart TB
 
     subgraph EXT["External network"]
         EXTUSERS{{"Operator, release officer<br/>and release approver"}}
-        EXTCORE["ext-core stack: 3 containers<br/>ext-app, ext-release,<br/>ext-postgres"]
+        EXTCORE["ext-core stack: 2 containers<br/>ext-app, ext-postgres"]
+        EXTREL["ext-release<br/>Decrypts at release,<br/>holds the outtake folder"]
         EXTSAN[["ext-sanitizer VM<br/>Dangerzone, ClamAV"]]
         EXTVAL["ext-validator<br/>DSS"]
         RESPVAL["ext-response-validator<br/>DSS"]
@@ -637,11 +640,14 @@ flowchart TB
         INTVAL["int-validator<br/>DSS"]
     end
 
-    FILES -.-|"Intake and outtake folders,<br/>no network connection"| EXTCORE
-    EXTUSERS -->|"F1 Console"| EXTCORE
+    FILES -.-|"Intake folder,<br/>no network connection"| EXTCORE
+    FILES -.-|"Outtake folder,<br/>no network connection"| EXTREL
+    EXTUSERS -->|"F1 Console, wired<br/>campus network only"| EXTCORE
     EXTCORE -->|"F3 Screen and flatten files"| EXTSAN
     EXTCORE -->|"F4 Check signed PDFs"| EXTVAL
-    EXTCORE -->|"F12 Check signed responses"| RESPVAL
+    EXTCORE -->|"F16 Start a release"| EXTREL
+    EXTREL -->|"F17 Database"| EXTCORE
+    EXTREL -->|"F12 Check signed responses"| RESPVAL
     EXTCORE -->|"F10 ClamAV updates"| EGRESS
     EXTVAL -->|"F5 Trust data"| EGRESS
     RESPVAL -->|"F13 Trust data"| EGRESS
@@ -664,7 +670,7 @@ flowchart TB
     classDef vm fill:#fbe3d9,stroke:#c8642e,stroke-width:2px,color:#1f1f1f
     classDef service fill:#eef0fb,stroke:#7b7fc4,color:#1f1f1f
     classDef people fill:#ffffff,stroke:#666666,color:#1f1f1f
-    class EXTVAL,RESPVAL,EGRESS,DMZI,DMZE,INTVAL,INTVER container
+    class EXTVAL,RESPVAL,EGRESS,DMZI,DMZE,INTVAL,INTVER,EXTREL container
     class EXTCORE extStack
     class INTCORE intStack
     class EXTSAN,INTSAN vm
@@ -684,13 +690,14 @@ The POC runs the two sanitizers in VMs and everything else in Docker containers 
 
 **External network**
 
-**`ext-app`** (in `ext-core`). External web app: operator and release console, intake worker, workflow and packaging. These share one container because they share code and trust level.
-- Software: Laravel, Vue, OpenSSL. Holds: `ext-package-sign`, the DSS client key, SFTP and agent keys, database credentials, the evidence store. Connections: F1 in; F3, F4, F7, F10 out.
+**`ext-app`** (in `ext-core`). External web app: operator and release console, intake worker, workflow and packaging. These share one container because they share code and trust level. The console is reachable only from workstations on the wired campus network (SR-17).
+- Software: Laravel, Vue, OpenSSL. Holds: `ext-package-sign`, the DSS client key, SFTP, agent and release keys, database credentials, the evidence store. Connections: F1 in; F3, F4, F7, F10, F16 out.
 
-**`ext-release`** (in `ext-core`). The release service: decrypts an approved response at release, runs the final checks (appendix D.4) and writes the file to the outtake folder.
-- Holds: `ext-release-enc`, the release decryption key, as its only holder. Connections: F12 out. Reads the evidence store, writes only the outtake folder.
+**`ext-release`**. The release service: decrypts an approved response at release, runs the final checks (appendix D.4) and writes the file to the outtake folder. In the MVP it runs on its own VM, apart from `ext-core`, and the outtake folder is on that VM (SR-16). Root on `ext-core` can then read neither the release key nor a decrypted response.
+- Holds: `ext-release-enc`, the release decryption key, as its only holder, and the outtake folder. Connections: F16 in; F12, F17 out.
+- It accepts the approvals that `ext-app` recorded in the database, and cannot check them itself (section 6.2).
 
-**`ext-postgres`, `int-postgres`**. Database and job queue for each side, with the hash-chained audit log (appendix B). The job queue is Laravel's database queue, so DXG needs no separate queue server. Reachable only inside its stack.
+**`ext-postgres`, `int-postgres`**. Database and job queue for each side, with the hash-chained audit log (appendix B). The job queue is Laravel's database queue, so DXG needs no separate queue server. Reachable only inside its stack, except that `ext-release` reaches `ext-postgres` (F17).
 
 **`ext-sanitizer`** (VM). The only place untrusted files are opened: parses mail, detects type (Magika), scans (ClamAV), checks macros (oletools), unpacks ZIP files and flattens documents to PDF (Dangerzone).
 - Software: a Python agent behind an SSH forced command (appendix D.1); Dangerzone starts one sandbox per document. Holds: no keys or credentials. Connections: F3 in, nothing out. Restored from a clean snapshot daily, because it is the host most likely to be compromised.
@@ -754,6 +761,7 @@ Confirm licenses again when pinning versions.
 | `sftp-ext-*`, `sftp-int-*` | `ext-app`, `int-app`, `int-verifier` | Separate SSH keys per host and direction. `int-verifier` holds the key for `dmz-import`, and `int-app` the key for `dmz-export` |
 | `agent-ext`, `agent-int` | `ext-app`, `int-app` | Run agent commands |
 | `verifier-int` | `int-app` | Run verifier commands |
+| `release-ext` | `ext-app` | Start a release on `ext-release` |
 
 Rules:
 
@@ -777,11 +785,11 @@ Qualified certificates used to sign response PDFs are outside DXG. They are held
 
 ### 5.1 Flow matrix
 
-The matrix names hosts, so it says `ext-core` for both `ext-app` and `ext-release`. Everything not listed is denied. In the POC, Docker networks enforce these rules (appendix E.8). In the MVP, they are enforced at the zone firewall and again on each host.
+The matrix names hosts, so it says `ext-core` for `ext-app` and `ext-postgres`. Everything not listed is denied. In the POC, Docker networks enforce these rules (appendix E.8). In the MVP, they are enforced at the zone firewall and again on each host.
 
 | ID | Source | Destination | Port | Purpose |
 | --- | --- | --- | --- | --- |
-| F1 | Operator browser | `ext-core` | 8080 | Console only: select files, review results, release responses |
+| F1 | Operator browser on the wired campus network | `ext-core` | 8080 | Console only: select files, review results, release responses |
 | F2 | Internal user browser | `int-core` | 8081 | Console only: work on requests, approve and sign responses |
 | F3 | `ext-core` | `ext-sanitizer` | 22 | Run agent commands |
 | F4 | `ext-core` | `ext-validator` | 8443 | DSS REST calls |
@@ -792,14 +800,16 @@ The matrix names hosts, so it says `ext-core` for both `ext-app` and `ext-releas
 | F9 | `int-core` | `int-sanitizer` | 22 | Run agent commands |
 | F10 | `ext-core` | `ext-egress` | 3128 | ClamAV definition updates |
 | F11 | `int-core` | `int-validator` | 8443 | DSS REST calls |
-| F12 | `ext-core` | `ext-response-validator` | 8443 | DSS REST calls at release |
+| F12 | `ext-release` | `ext-response-validator` | 8443 | DSS REST calls at release |
 | F13 | `ext-response-validator` | `ext-egress` | 3128 | Trust lists, OCSP, CRL, TSA |
 | F14 | `int-verifier` | `dmz-import` | 22 | Pull packages |
 | F15 | `int-core` | `int-verifier` | 22 | Run verifier commands |
+| F16 | `ext-core` | `ext-release` | 22 | Start a release, hand over the encrypted package |
+| F17 | `ext-release` | `ext-core` | 5432 | Read the release, record the result and the audit event |
 
 `ext-sanitizer`, `int-sanitizer`, `int-validator` and both DMZ hosts have no outbound rules. `int-verifier` has one, F14. `int-core` has no route to the external network or the internet.
 
-In the POC, the two console ports are published only on the Docker host's loopback address.
+In the POC, the two console ports are published only on the Docker host's loopback address. In the MVP, the zone firewall allows F1 only from the wired campus network, and not from the internet or any other network.
 
 The MVP adds these flows for the mail adapter:
 
@@ -812,7 +822,7 @@ The MVP adds these flows for the mail adapter:
 
 The pipeline starts at a folder and ends at a folder. It does not know where a request came from or how a response leaves, so a new adapter does not change the pipeline.
 
-The two folders sit on `ext-core` and are not network shares. They replace only the outer edges of the system. Sanitization, the DMZ transfer, approvals and human release are unchanged.
+The intake folder sits on `ext-core` and the outtake folder on `ext-release`. Neither is a network share. They replace only the outer edges of the system. Sanitization, the DMZ transfer, approvals and human release are unchanged.
 
 ```text
 /srv/dxg/intake/
@@ -915,7 +925,7 @@ Section 6.1 lists what can go wrong and what limits the damage. Section 6.2 list
 | Disguised file type | Content-based detection, and agreement with the file extension | Rare polyglot files, which are flattened anyway |
 | ZIP bomb or path traversal | Unpacking limits, generated file names, disposable host | Resource exhaustion on the isolated host only |
 | Compromised `ext-sanitizer` | No keys or credentials, output treated as untrusted, restricted PDF check on the external side, full verification on the internal side | A forged but well-formed PDF with false visible content |
-| Compromised `ext-core` | Encrypted responses, the internal side verifies every import and re-checks every PDF | Attacker can read the mailbox, evidence and queued imports, and can sign packages until the key is revoked |
+| Compromised `ext-core` | The release key and decrypted responses are on `ext-release`. The console is reachable only from the wired campus network. The internal side verifies every import and re-checks every PDF | Attacker can read the mailbox, evidence and queued imports, and can sign packages until the key is revoked. Attacker can also record false approvals, and so release any queued response to a recipient of their choice. Attacker cannot change a response |
 | Compromised DMZ host | Encryption, signatures, sequence numbers | Denial of service, and exposure of envelope metadata |
 | Forged validation report | Package signature, signing key held only by `ext-app` | The internal side trusts the external validator result, so `ext-core` compromise affects it |
 | Malware on the internal network leaking data | Response needs an open request, approval, DLP, size limits, flattening before signing, append check, no recipient control | Data hidden in page images cannot be reliably detected |
@@ -936,6 +946,7 @@ Section 6.1 lists what can go wrong and what limits the damage. Section 6.2 list
 - **Fidelity.** Output is rasterized, so files can grow and lose formulas, links and text selection quality. OCR quality depends on the source and language.
 - **Spreadsheets.** Formulas and live data do not reach the internal network.
 - **Trust in the external side.** The internal side cannot revalidate the original signature. It trusts a report signed by `ext-app`.
+- **Release approvals.** `ext-release` accepts the approvals that `ext-app` recorded, so whoever controls `ext-app` can release a queued response without an officer. A separate confirmation on `ext-release` would close this. It was left out so that officers and approvers use one login.
 - **DLP.** Rule-based text scanning catches obvious leaks only. Malware could hide data inside a page image.
 - **Availability.** Every component is a single instance.
 - **Support.** No vendor support exists. Open-source licenses, including Dangerzone's AGPLv3, need legal review for your use.
@@ -1100,7 +1111,7 @@ Back up both databases, the evidence store, configuration, and the audit hash ex
 | --- | --- | --- |
 | Mail server unavailable | Adapter retries with backoff | Automatic |
 | Folder adapter or mail adapter stopped | Drops or outtake items wait, and an alert is raised | Restart the adapter |
-| `ext-core` restarts during delivery | Outtake contents are lost, and the release moves to `failed` | Officer retries the release |
+| `ext-release` restarts during delivery | Outtake contents are lost, and the release moves to `failed` | Officer retries the release |
 | `ext-sanitizer` unavailable | Jobs stay queued | Restore host, and jobs resume |
 | Flattening fails | Item rejected, with original kept in evidence | Ask the sender for another format |
 | DSS unavailable | Signed items stay queued | Restore DSS |
@@ -1208,6 +1219,7 @@ Keep hostile samples in a controlled store on the external network only.
 | T-55 | Typical documents, measured per page and per file | Baseline recorded for time and output size |
 | T-56 | Largest expected file and peak daily volume | Queue clears within the agreed time |
 | T-57 | Connection from `int-verifier` to anything other than `dmz-import`, and from `dmz-import` to `int-core` | Blocked and logged |
+| T-59 | Connection to the external console from any address outside the wired campus network | Blocked and logged |
 
 ### 10.7 MVP acceptance criteria
 
@@ -1227,7 +1239,7 @@ Keep hostile samples in a controlled store on the external network only.
 | 2. Signed PDFs | DSS, strict policy, evidence store, reports, review flow | T-20 to T-27 and T-46 pass |
 | 3. Response path | Internal workflow, flattening, DLP rules, approvals, PDF signing upload, `int-validator`, package signing and encryption | T-37, T-38 and T-60 to T-69 pass |
 | 4. Release console | Queue, policy rules, second approval, outtake folder | T-39 to T-44 pass |
-| 5. Hardening | Move from Docker to VMs, add the mail adapter, monitoring, backups, access review, procedures, separate hardware | T-17 and T-50 to T-57 pass |
+| 5. Hardening | Move from Docker to VMs, add the mail adapter, monitoring, backups, access review, procedures, separate hardware | T-17, T-50 to T-57 and T-59 pass |
 | 6. MVP sign-off | Independent penetration test and fixes | Section 10.7 met |
 | Optional | Signed PDF passthrough, then return, only after an activation decision | Section 9 of the [passthrough design](document-exchange-signed-pdf-passthrough.md) met |
 
@@ -1283,7 +1295,7 @@ High:
 1. **The append check covers only content streams** (appendix F.2). An update that replaces a page image or `/Resources` passes, and DSS does not see changes made in the signing update itself. This weakens SR-13.
 2. **The allowlist PDF check is not written.** `int-verifier` must accept only the structure that Dangerzone produces (appendix D.5, T-58), but `pdf_policy.py` is still a denylist (appendix F.1). Until the allowlist exists, a compromised external host could send a PDF with a hostile font or image and no forbidden key. Write the allowlist from real Dangerzone output in phase 1.
 3. **Timestamp access is unresolved** (section 3.4). The DMZ proxy is an exception to rule 2 in section 1.1, and the internal timestamp authority in section 6 of the [passthrough design](document-exchange-signed-pdf-passthrough.md) would not meet `REQUIRE_QUALIFIED_TIMESTAMP`. The "signed after approval" check also needs a reliable internal clock.
-4. **The MVP mail adapter has no settled place.** Section 5.2 says the folders are not network shares and appendix E.8 makes the adapter a separate component, but appendix E.7 creates its user on `ext-core`.
+4. **The MVP mail adapter has no settled place.** Section 5.2 says the folders are not network shares and appendix E.8 makes the adapter a separate component, but appendix E.7 creates its user on `ext-core`. The adapter also needs the outtake folder, which is on `ext-release` in the MVP, so it reads folders on two hosts.
 
 Medium:
 
@@ -1291,10 +1303,11 @@ Medium:
 6. `open-payload.sh` decrypts into `/dev/shm`, which Docker limits to 64 MB by default, below `MAX_PACKAGE_BYTES`.
 7. Nothing defines what happens when a package would exceed `MAX_PACKAGE_BYTES`, although a ZIP can unpack to `ZIP_MAX_TOTAL_BYTES` and flattening makes files larger.
 8. ClamAV definitions reach `ext-sanitizer` daily (section 9.2), but the agent has no command for it (appendix D.1) and the snapshot restore removes them.
-9. In the Compose file, `ext-release` has no database secret, no volume for encrypted responses and no socket shared with `ext-app`.
+9. In the Compose file, `ext-release` has no database secret, and `ext-app` has no key for the F16 call.
 10. Mail handling skips S/MIME, attached messages, `winmail.dat`, `.pptx`, `.rtf`, `.heic` and inline images, shows no SPF, DKIM or DMARC result, and does not say whether the suggested recipient is From or Reply-To.
 11. The `bounced` status has no source and no matching internal state.
 12. Maintenance imports into the internal network (trust-list snapshots, Dangerzone templates, OS patches) have no design.
+13. `deploy/ext-core/setup-folders.sh` still creates the outtake folder and the `dxg-release` user on `ext-core`, and gives `dxg-web` access to the outtake folder. For the MVP, the outtake part must move to a script for the `ext-release` VM, without `dxg-web`.
 
 ## Appendix A. Settings and default limits
 
@@ -1462,7 +1475,9 @@ Both consoles use the same conventions: session authentication, role checks on e
 
 ### D.4 Release service
 
-`ext-release` is a small process on `ext-core`, running as its own user, and it is the only process that can read the release decryption key. It listens on a Unix socket and takes one argument, a release ID.
+`ext-release` is a small service, and the only one that can read the release decryption key. In the MVP it runs on its own VM, which also holds the outtake folder, so neither the key nor a decrypted response is ever on `ext-core`.
+
+`ext-app` calls it over SSH with a dedicated key and a forced command (F16), in the same way as the sanitizer agent. The call carries a release ID and the encrypted package. `ext-release` reaches the database through its own role (F17), which can read releases and responses, record a delivery result and add audit events.
 
 For each call, it:
 
@@ -1475,7 +1490,9 @@ For each call, it:
 7. Writes the file and `delivery.json` to the channel's outtake folder.
 8. Writes the audit event, and deletes its own plaintext copy.
 
-The adapter's result in `outtake/results/` completes the release.
+`ext-release` reads the adapter's result in `outtake/results/` and records it, which completes the release.
+
+`ext-release` cannot check an approval itself. It accepts what `ext-app` recorded in the database (section 6.2).
 
 ### D.5 Internal verifier
 
@@ -1523,6 +1540,7 @@ For the POC, start with 8 vCPU, 16 GiB RAM and 200 GiB disk for the Docker conta
 | Host | vCPU | RAM | Disk |
 | --- | --- | --- | --- |
 | `ext-core` | 4 | 8 GiB | 200 GiB |
+| `ext-release` | 2 | 4 GiB | 40 GiB |
 | `ext-sanitizer` | 8 | 16 GiB | 100 GiB |
 | `ext-validator` | 2 | 4 GiB | 40 GiB |
 | `ext-response-validator` | 2 | 4 GiB | 40 GiB |
@@ -1602,7 +1620,7 @@ Use MFA on every account on the external network. Use the existing directory on 
 
 ### E.7 Intake and outtake folders
 
-The example setup for the MVP `ext-core` VM is in [`deploy/ext-core/setup-folders.sh`](deploy/ext-core/setup-folders.sh). In the POC, the same two folders are host folders mounted into the containers.
+The example setup for the MVP `ext-core` VM is in [`deploy/ext-core/setup-folders.sh`](deploy/ext-core/setup-folders.sh). It still creates both folders on one host. In the MVP, the outtake folder is on the `ext-release` VM (section 12.2, issue 13). In the POC, the same two folders are host folders mounted into the containers.
 
 Mount the outtake folder on tmpfs before creating its subfolders, and create them at boot. Example `fstab` entry:
 
@@ -1686,6 +1704,7 @@ Script: [`checks/signature_append_check.py`](checks/signature_append_check.py).
 | `sshd_config`, Squid guidance, tmpfs mount and host sizing | **Not tested** |
 | Adapters and the intake worker | Specified only, **not built** |
 | `int-verifier` and its commands | Specified only, **not built** |
+| `ext-release` on its own host, with flows F16 and F17 | Specified only, **not built** |
 | Signed PDFs from other signing software | **Not tested**. Test signatures came from one library only |
 | Response signature rule with real qualified certificates and timestamps | **Not tested**. Tests used private test certificates, and DSS was not executed |
 | `pdf_policy.py output` against real Dangerzone output | **Not tested** |
