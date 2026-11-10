@@ -6,7 +6,7 @@
 | --- | --- |
 | Status | Designed, disabled by default, not part of the POC or MVP |
 | Date | 2026-11-04 |
-| Audience | Security owner and service owner deciding on activation, and the developers who would build it |
+| Audience | Security team and service owner deciding on activation, and the developers who would build it |
 
 This document belongs to the [technical design](document-exchange-mvp-technical-documentation.md) and uses its terms, settings, requirement IDs and test IDs. Section and appendix numbers that name the technical design refer to that document. All other section numbers refer to this one.
 
@@ -29,7 +29,7 @@ A new signature on a PDF is appended to the existing file, so this cannot work o
 
 ## 2. Risk and open points
 
-This is a deliberate exception to rule 1 in section 1.1 of the [technical design](document-exchange-mvp-technical-documentation.md), and to SR-09 and SR-18. It must not be activated without a written risk acceptance from the security owner.
+This is a deliberate exception to rule 1 in section 1.1 of the [technical design](document-exchange-mvp-technical-documentation.md), and to SR-09 and SR-18. It must not be activated without a written risk acceptance from the security team.
 
 Risks:
 
@@ -176,7 +176,7 @@ A `countersigned` response uses the manifest in appendix C.3 of the [technical d
 
 Before activation:
 
-1. The security owner signs the risk acceptance, which names the exceptions to SR-09 and SR-18.
+1. The security team signs the risk acceptance, which names the exceptions to SR-09 and SR-18.
 2. The two open points in section 2 are settled, and any change to the eSign-API is delivered.
 3. The owner of the composing application confirms that it accepts an original for signing without opening it.
 4. The records owner confirms how signed originals are retained on both networks.
