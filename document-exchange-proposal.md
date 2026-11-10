@@ -2,6 +2,10 @@
 
 Teodor Ion · 4 November 2026
 
+## What we ask
+
+We ask the security team for seven decisions, listed at the end of this proposal. The last one is approval to start a proof of concept on one isolated host, with test data only.
+
 ## The need
 
 Requests arrive by email at a mailbox on the internet-connected network, called the external network here. They carry Word, Excel, PDF, text, image and ZIP attachments, and some PDFs are digitally signed. Staff on the internal network (the internal network) need some of these documents, and they answer each request with a signed response.
@@ -73,7 +77,7 @@ flowchart TB
     style INT fill:#ebf5ec,stroke:#7fbf8a
 ```
 
-Each core server talks only to its own isolated helpers and to the DMZ. Nothing on the external side or in the DMZ can open a connection to the internal network.
+The core servers are the two application servers: ext-app with ext-release on the external network, and int-app on the internal network. Each core server talks only to its own isolated helpers and to the DMZ. Nothing on the external side or in the DMZ can open a connection to the internal network.
 
 **Incoming request, external network to internal network**
 
@@ -98,14 +102,14 @@ The internal network can never choose a recipient, and the external network can 
 
 Six rules carry the design, and each is enforced by a control rather than by trust in a person or one product.
 
-| Rule | How it is enforced |
-| --- | --- |
-| Nothing from the internet reaches the internal network unchanged | Every document is rebuilt as a flattened PDF. Only flattened PDFs, normalized text and signed validation reports cross. |
-| Nothing connects into the internal network | Both networks connect out to the DMZ servers. The DMZ servers accept file transfers only from the two core servers and cannot open connections themselves. |
-| Untrusted files are opened only in disposable isolation | A dedicated virtual machine with no keys and no network opens them, and each document is flattened inside a further sandbox. The machine is reset from a clean snapshot daily. |
-| Packages cannot be read or forged in transit | The sender signs each package and encrypts it for the receiver, with pinned certificates, sequence numbers and replay detection. Each direction has its own DMZ server, account and keys. |
-| People decide, the system enforces | An operator selects what enters. A response needs an author, a different approver and a signer. The internal network cannot set a recipient, and the release officer cannot edit the file. |
-| Every step is traceable | Both sides keep a hash-chained audit log linked to the request ID. Original emails stay in an evidence store on the external network. |
+| # | Rule | How it is enforced |
+| --- | --- | --- |
+| 1 | Nothing from the internet reaches the internal network unchanged | Every document is rebuilt as a flattened PDF. Only flattened PDFs, normalized text and signed validation reports cross. |
+| 2 | Nothing connects into the internal network | Both networks connect out to the DMZ servers. The DMZ servers accept file transfers only from the two core servers and cannot open connections themselves. |
+| 3 | Untrusted files are opened only in disposable isolation | A dedicated virtual machine with no keys and no network opens them, and each document is flattened inside a further sandbox. The machine is reset from a clean snapshot daily. |
+| 4 | Packages cannot be read or forged in transit | The sender signs each package and encrypts it for the receiver, with pinned certificates, sequence numbers and replay detection. Each direction has its own DMZ server, account and keys. |
+| 5 | People decide, the system enforces | An operator selects what enters. A response needs an author, a different approver and a signer. The internal network cannot set a recipient, and the release officer cannot edit the file. |
+| 6 | Every step is traceable | Both sides keep a hash-chained audit log linked to the request ID. Original emails stay in an evidence store on the external network. |
 
 Antivirus and type checks only reject known-bad files early. Flattening is the main protection, and a clean scan never skips it.
 
@@ -161,7 +165,7 @@ The cost is fidelity. Flattened PDFs keep a document's look but lose formulas, l
 
 ## Remaining risks and known gaps
 
-Five risks remain by design, and four gaps found in review must be closed before the proof of concept.
+Five risks remain by design. A design review also found twelve open issues. The four most serious are listed here and must be closed before the proof of concept. The [technical design](document-exchange-mvp-technical-documentation.md) lists all twelve in section 12.2.
 
 | Remaining risk | What limits it |
 | --- | --- |
@@ -191,7 +195,7 @@ The work runs in six phases, and only test data is used until the MVP passes an 
 | 5. Hardening | Separate VMs and hardware, mail adapter, monitoring, backups, procedures | Network isolation, restore and load tests pass |
 | 6. MVP sign-off | Independent penetration test and fixes | No open critical or high findings |
 
-The full test list, with an ID for each case, is in the [technical design](document-exchange-mvp-technical-documentation.md).
+The full test list, with an ID for each case, is in section 10 of the [technical design](document-exchange-mvp-technical-documentation.md).
 
 ## Decisions we need from the security team
 
@@ -207,4 +211,4 @@ We ask for seven decisions, the last being approval to start the proof of concep
 | What must the independent penetration test cover? | The sanitizer agent, package parsers, both consoles and every network path. |
 | May we start the proof of concept? | One isolated host, test data only, no connection to the real mailbox or the internal network. |
 
-Passing a signed PDF through unchanged, so the internal network can countersign it, is designed but switched off. We do not ask for it now. Turning it on later would need a written risk acceptance.
+Passing a signed PDF through unchanged, so the internal network can countersign it, is designed in a [separate document](document-exchange-signed-pdf-passthrough.md) but switched off. We do not ask for it now. Turning it on later would need a written risk acceptance.

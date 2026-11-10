@@ -14,7 +14,7 @@ This document belongs to the [technical design](document-exchange-mvp-technical-
 
 ## 1. Purpose
 
-By default, an incoming signed PDF reaches the internal network as a flattened copy, which removes its signature. These two options allow an eligible original to stay byte-identical, receive more signatures on the internal network, and leave again with all of its signatures intact. New responses created on the internal network do not need this section. They follow section 3.4 of the [technical design](document-exchange-mvp-technical-documentation.md).
+By default, an incoming signed PDF reaches the internal network as a flattened copy, which removes its signature. The two settings below allow an eligible original to stay byte-identical, receive more signatures on the internal network, and leave again with all of its signatures intact. New responses created on the internal network do not need this feature. They follow section 3.4 of the [technical design](document-exchange-mvp-technical-documentation.md).
 
 | Setting | Default | Effect |
 | --- | --- | --- |

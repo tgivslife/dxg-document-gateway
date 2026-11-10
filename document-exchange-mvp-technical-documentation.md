@@ -9,7 +9,12 @@
 | Working name | DXG (Document Exchange Gateway) |
 | Audience | Developers, infrastructure engineers, security reviewers |
 
-Sections 1 to 4 explain what DXG must do, how it works and what each part is. Sections 5 to 12 hold the detailed design. The appendices hold settings, interfaces and deployment details, and link to the code and configuration files kept next to this document in `checks/`, `scripts/`, `sql/`, `schemas/`, `examples/`, `poc/` and `deploy/`. For a short overview for decision makers, read the [proposal](document-exchange-proposal.md).
+Sections 1 to 4 explain what DXG must do, how it works and what each part is. Sections 5 to 12 hold the detailed design. The appendices hold settings, interfaces and deployment details, and link to the code and configuration files kept next to this document in `checks/`, `scripts/`, `sql/`, `schemas/`, `examples/`, `poc/` and `deploy/`.
+
+Two other documents belong with this one:
+
+- The [proposal](document-exchange-proposal.md) is a short overview for decision makers.
+- The [passthrough design](document-exchange-signed-pdf-passthrough.md) describes one optional feature that is disabled by default.
 
 ## 1. Overview
 
@@ -17,13 +22,16 @@ Sections 1 to 4 explain what DXG must do, how it works and what each part is. Se
 
 DXG moves documents from mail requests received on the internet-connected external network to the internal network (intranet). It then returns a response created on the internal network to the external network, where an authorized user decides how and where to send it.
 
-The design has three rules:
+The design has six rules. The [proposal](document-exchange-proposal.md) lists the same six, with the same numbers.
 
-1. **Nothing from the internet reaches the internal network unchanged.** Documents are rebuilt as flattened PDFs. Only signed manifests, reports and normalized text accompany them.
-2. **The internal network never connects to the internet or directly to the external network.** The two networks exchange signed, encrypted packages through a DMZ, and the internal network opens all connections on its side.
-3. **Each direction has its own owner.** The internal side approves the content of a response. A user on the external side chooses the recipient and channel.
+1. **Nothing from the internet reaches the internal network unchanged.** Documents are flattened to PDF. Only signed manifests, reports and normalized text accompany them.
+2. **Nothing connects into the internal network.** The internal network never connects to the internet or directly to the external network. The two networks exchange signed, encrypted packages through a DMZ, and the internal network opens all connections on its side.
+3. **Untrusted files are opened only in disposable isolation.** A VM with no keys and no outbound network opens them. It is restored from a clean snapshot daily.
+4. **Packages cannot be read or forged in transit.** The sender signs each package and encrypts it for the receiver. Each direction has its own DMZ host, account and keys.
+5. **People decide, the system enforces.** An operator selects what enters. The internal side approves the content of a response, and a user on the external side chooses the recipient and channel.
+6. **Every step is traceable.** Both sides record every decision against the request ID in a hash-chained audit log.
 
-Section 3.6 defines one optional exception for incoming signed PDFs. It is disabled by default and needs a written risk acceptance.
+Section 2.2 turns these rules into security requirements. Section 3.6 defines one optional exception to rule 1 for incoming signed PDFs. It is disabled by default and needs a written risk acceptance.
 
 ### 1.2 Scope
 
@@ -53,31 +61,53 @@ Section 3.6 defines one optional exception for incoming signed PDFs. It is disab
 
 ### 1.4 Terms
 
+**Networks and hosts**
+
 | Term | Meaning |
 | --- | --- |
-| External network | The internet-connected network that holds the mailbox |
-| Internal network | The intranet, with no internet access |
-| Request | One received email and everything derived from it |
-| Item | One attachment, or one file unpacked from a ZIP |
-| Package | The file that crosses the DMZ, in either direction |
-| Sanitized copy | The flattened PDF produced from an item |
-| Evidence store | Protected storage on the external network holding unchanged originals |
-| Release | The act of sending an approved response from the external network |
-| Adapter | A small service that moves files between an outside source or target and a folder |
-| Intake folder | Where every request enters the pipeline |
-| Outtake folder | Where every released response leaves the pipeline |
-| Base PDF | The approved, flattened PDF that a signer signs |
-| Passthrough | The optional transfer of an incoming signed PDF without flattening (section 3.6) |
-| CDR | Content disarm and reconstruction |
-| DLP | Data loss prevention |
-| PAdES | PDF Advanced Electronic Signatures |
+| External network, external side | The internet-connected network that holds the mailbox, and the DXG components on it |
+| Internal network, internal side | The intranet, with no internet access, and the DXG components on it |
+| DMZ | A separate network zone between the two networks. It holds only packages |
+| `ext-app`, `int-app` | The web application on each side. This document names the application when it describes work, such as building a package |
+| `ext-core`, `int-core` | The stack, and in the MVP the VM, that runs the application with its database. `ext-core` also runs `ext-release`. This document names the stack when it describes a host, such as in the flow matrix |
 | Container | A long-running Docker container, started from a pinned image |
 | Stack | A group of containers that work together, such as `ext-core` |
 | Sandbox | A short-lived container created for one document. Dangerzone starts these inside its VM |
 | VM | A separate virtual machine, used for the sanitizers in the POC and for everything in the MVP. The MVP may use a physical server instead |
-| DMZ | A separate network zone between the two networks. It holds only packages |
 | POC, MVP | Proof of concept on test data, and the minimum viable product for real use |
+
+**Documents and their path**
+
+| Term | Meaning |
+| --- | --- |
+| Request | One received email and everything derived from it |
+| Item | One attachment, or one file unpacked from a ZIP |
+| Adapter | A small service that moves files between an outside source or target and a folder |
+| Intake folder | Where every request enters the pipeline |
+| Drop | One request as an adapter leaves it in the intake folder: a `request.json` file and the files it lists |
+| Evidence store | Protected storage on the external network holding unchanged originals |
+| Flatten | Render a document to pixels and rebuild it as a PDF, with an OCR text layer. Only the look of each page survives |
+| Normalize | Clean a text file or email body: check the encoding and remove control characters (section 7.3) |
+| Sanitize | Make an item safe for the internal network: flatten a document, or normalize a text file |
+| Sanitized copy | The flattened PDF produced from an item |
+| Package | The file that crosses the DMZ, in either direction |
+| Envelope, manifest | The signed public metadata of a package, and the signed list of files inside its encrypted payload (section 8) |
+| Ack | A package with no payload that confirms or rejects another package |
+| Base PDF | The approved, flattened PDF that a signer signs |
+| Release | The act of sending an approved response from the external network |
+| Outtake folder | Where every released response leaves the pipeline |
+| Passthrough | The optional transfer of an incoming signed PDF without flattening (section 3.6) |
+
+Appendix E.6 lists the roles, such as operator, release officer, author, approver and signer.
+
+**Abbreviations**
+
+| Term | Meaning |
+| --- | --- |
+| CDR | Content disarm and reconstruction |
+| DLP | Data loss prevention |
 | DSS | The European Commission's Digital Signature Service, used to validate signatures (section 4.3) |
+| PAdES | PDF Advanced Electronic Signatures |
 | QES, `QESig` | Qualified electronic signature, the highest level of electronic signature under eIDAS |
 | OCSP, CRL | Online certificate status checks and certificate revocation lists |
 | TSA | Timestamp authority |
@@ -85,6 +115,8 @@ Section 3.6 defines one optional exception for incoming signed PDFs. It is disab
 | SFTP | File transfer over SSH |
 
 ## 2. Requirements
+
+Each requirement has an ID that stays the same when this document changes. The security requirements enforce the six rules in section 1.1.
 
 ### 2.1 Functional requirements
 
@@ -269,16 +301,16 @@ sequenceDiagram
     Note over EC: Verify ack, mark the<br/>request as delivered
 ```
 
-Steps in detail:
+Steps in detail, with the step numbers from the first diagram:
 
-1. **Intake.** An adapter places a complete drop in the intake folder (section 5.2). The intake worker validates it, stores the originals and their hashes in the evidence store, and removes the drop.
-2. **Parse.** For raw mail, `ext-sanitizer` parses the MIME structure. `ext-app` receives JSON metadata and raw parts and does no MIME parsing of its own.
-3. **Screen.** Each attachment passes the checks in section 7. Rejected items keep their evidence record and reason.
-4. **Select.** The operator sees sender, subject, normalized body, file name, detected type, size and scan result. The console does not render attachments.
-5. **Validate.** Signed PDFs follow section 3.3.
-6. **Flatten.** Selected items are flattened, then checked by the PDF policy (appendix F) in a restricted container on `ext-core`.
-7. **Package.** `ext-app` builds the package from section 8 and uploads it to `dmz-import`.
-8. **Receive.** `int-app` verifies the package in the order in section 8.4, stores the documents and sends an `ack`.
+- **Steps 1 and 2, intake.** An adapter places a complete drop in the intake folder (section 5.2). The intake worker in `ext-app` validates it, stores the originals and their hashes in the evidence store, and removes the drop.
+- **Step 3, parse and screen.** For raw mail, `ext-sanitizer` parses the MIME structure. `ext-app` receives JSON metadata and raw parts and does no MIME parsing of its own. Each attachment then passes the checks in section 7. Rejected items keep their evidence record and reason.
+- **Step 4, select.** The operator sees sender, subject, normalized body, file name, detected type, size and scan result. The console does not render attachments.
+- **Step 5, validate.** Signed PDFs follow section 3.3.
+- **Step 6, flatten.** `ext-sanitizer` flattens each selected document and normalizes each selected text file.
+- **Step 7, check and package.** The PDF policy (appendix F) checks each flattened PDF in a restricted container on `ext-core`. `ext-app` then builds the package from section 8.
+- **Step 8, transfer.** `ext-app` uploads the package to `dmz-import`.
+- **Step 9, receive.** `int-app` collects the package, verifies it in the order in section 8.4, stores the documents and sends an `ack`.
 
 If the internal side reports a rejection, or no `ack` arrives within `ACK_TIMEOUT_MINUTES`, the request is flagged for an operator to resend.
 
@@ -630,7 +662,7 @@ Section 4.2 describes each host, and section 5.1 gives the ports. Timestamp acce
 
 ### 4.2 What each component does
 
-The POC runs the two sanitizers in VMs and everything else in Docker containers on one host (appendix E.8). The MVP keeps the same components and connections, but gives each component or stack its own VM, with clean snapshots and a firewall on each host. Internal and DMZ workloads run on hardware that does not also host external workloads.
+The POC runs the two sanitizers in VMs and everything else in Docker containers on one host (appendix E.8). The MVP keeps the same components and connections, but gives each component or stack its own VM, with clean snapshots and a firewall on each host. Internal and DMZ workloads run on hardware that does not also host external workloads, because a shared hypervisor is a path between the networks.
 
 **External network**
 
@@ -640,7 +672,7 @@ The POC runs the two sanitizers in VMs and everything else in Docker containers 
 **`ext-release`** (in `ext-core`). The release service: decrypts an approved response at release, runs the final checks (appendix D.4) and writes the file to the outtake folder.
 - Holds: `ext-release-enc`, the release decryption key, as its only holder. Connections: F12 out. Reads the evidence store, writes only the outtake folder.
 
-**`ext-postgres`, `int-postgres`**. Database and job queue for each side, with the hash-chained audit log (appendix B). Laravel's database queue replaces Redis. Reachable only inside its stack.
+**`ext-postgres`, `int-postgres`**. Database and job queue for each side, with the hash-chained audit log (appendix B). The job queue is Laravel's database queue, so DXG needs no separate queue server. Reachable only inside its stack.
 
 **`ext-sanitizer`** (VM). The only place untrusted files are opened: parses mail, detects type (Magika), scans (ClamAV), checks macros (oletools), unpacks ZIP files and flattens documents to PDF (Dangerzone).
 - Software: a Python agent behind an SSH forced command (appendix D.1); Dangerzone starts one sandbox per document. Holds: no keys or credentials. Connections: F3 in, nothing out. Restored from a clean snapshot daily, because it is the host most likely to be compromised.
@@ -723,7 +755,7 @@ Qualified certificates used to sign response PDFs are outside DXG. They are held
 
 ### 5.1 Flow matrix
 
-Everything not listed is denied. In the POC, Docker networks enforce these rules (appendix E.8). In the MVP, they are enforced at the zone firewall and again on each host.
+The matrix names hosts, so it says `ext-core` for both `ext-app` and `ext-release`. Everything not listed is denied. In the POC, Docker networks enforce these rules (appendix E.8). In the MVP, they are enforced at the zone firewall and again on each host.
 
 | ID | Source | Destination | Port | Purpose |
 | --- | --- | --- | --- | --- |
@@ -751,8 +783,6 @@ The MVP adds these flows for the mail adapter:
 | --- | --- | --- | --- | --- |
 | M1 | `ext-mail-adapter` | Mail server | 993 | Fetch mail |
 | M2 | `ext-mail-adapter` | Mail relay | 587 | Send released responses |
-
-In the MVP, run internal and DMZ workloads on hardware that does not also host external workloads, because a shared hypervisor is a path between the networks.
 
 ### 5.2 Intake and outtake folders
 
@@ -850,6 +880,8 @@ The adapter checks `expires_at` and the file hash, delivers the file, writes a r
 - A watched network share is an adapter that copies files in. It is never the intake folder itself.
 
 ## 6. Threat model and limitations
+
+Section 6.1 lists what can go wrong and what limits the damage. Section 6.2 lists what the design does not do at all.
 
 ### 6.1 Threat model
 
@@ -1173,7 +1205,7 @@ Keep hostile samples in a controlled store on the external network only.
 
 | Item | Approach |
 | --- | --- |
-| Hardware diode | Implement the transport interface below with two physical diodes and Lidi. Acks then flow through the opposite diode |
+| Hardware diode | Implement the transport interface below this table with two physical diodes and Lidi. Acks then flow through the opposite diode |
 | Editable spreadsheet data | Extract values in the sandbox, and write a new XLSX with cells stored as text |
 | `.p7m`, `.p7s`, ASiC | Validate with DSS, extract content, and sanitize the extracted files |
 | Recipient encryption | S/MIME for known recipients, or a secure download portal |
@@ -1182,7 +1214,7 @@ Keep hostile samples in a controlled store on the external network only.
 | Hardware key protection | PKCS#11 tokens or HSM for release and signing keys |
 | High availability | Replicated database and multiple workers after volume justifies it |
 
-Keep the transfer layer behind a small interface so that a diode can replace SFTP without changing the package format:
+For the hardware diode, keep the transfer layer behind a small interface so that a diode can replace SFTP without changing the package format:
 
 ```text
 Transport.put(package_path)
@@ -1194,6 +1226,8 @@ Transport.delete(name)
 A diode implementation has no `list` or `delete` across the link, so the receiver watches a local spool and the `ack` confirms delivery. Lidi sends without acknowledgement or retransmission at the link level, so package-level acks and resends remain necessary.
 
 ## 12. Open items
+
+Nothing in this section is settled. Section 12.1 lists decisions that named owners must make, and section 12.2 lists issues that a design review found.
 
 ### 12.1 Decisions needed before the POC
 
@@ -1234,33 +1268,38 @@ Medium:
 
 ## Appendix A. Settings and default limits
 
-These are starting values for the POC.
+These are starting values for the POC. The last column says where each setting is used.
 
-| Setting | Default |
-| --- | --- |
-| `MAX_DROP_BYTES` | 100 MiB |
-| `MAX_ITEM_BYTES` | 50 MiB |
-| `MAX_TEXT_BYTES` | 5 MiB |
-| `MAX_PDF_PAGES` | 500 |
-| `MAX_PACKAGE_BYTES` | 500 MiB |
-| `MAX_RESPONSE_PAGES` | 100 |
-| `MAX_RESPONSE_BYTES` | 25 MiB |
-| `SIGNATURE_MAX_APPEND_BYTES` | 2 MiB |
-| `RESPONSE_SIGNATURE_LEVELS` | `QESig` |
-| `REQUIRE_QUALIFIED_TIMESTAMP` | `true` |
-| `TRUST_SNAPSHOT_MAX_DAYS` | 7 |
-| `ZIP_MAX_ENTRIES` | 200 |
-| `ZIP_MAX_TOTAL_BYTES` | 500 MiB |
-| `ZIP_MAX_RATIO` | 100 |
-| `ZIP_MAX_DEPTH` | 2 |
-| `MAGIKA_MIN_SCORE` | 0.90 |
-| `OCR_LANG` | Set per deployment, for example `eng` or `ron` |
-| `ACK_TIMEOUT_MINUTES` | 30 |
-| `RELEASE_EXPIRY_DAYS` | 7 |
-| `OUTTAKE_MAX_MINUTES` | 60 |
-| `EVIDENCE_RETENTION_DAYS` | Set by the records owner |
-
-Other settings named in this document: `ALLOW_FAILED_AS_UNSIGNED` (default `false`, section 3.3), `SECOND_APPROVAL_DOMAINS` and `SENSITIVE_ALLOW_EMAIL` (default `false`, section 3.5), `TEXT_FALLBACK_ENCODINGS` (section 7.3), and `SIGNED_PDF_PASSTHROUGH_ENABLED`, `SIGNED_PDF_RETURN_ENABLED` and `SIGNED_PDF_TRUST_ANCHORS` ([passthrough design](document-exchange-signed-pdf-passthrough.md)).
+| Setting | Default | Used in |
+| --- | --- | --- |
+| `MAX_DROP_BYTES` | 100 MiB | Section 5.2 |
+| `MAX_ITEM_BYTES` | 50 MiB | Section 7.2 |
+| `MAX_TEXT_BYTES` | 5 MiB | Section 7.3 |
+| `MAX_PDF_PAGES` | 500 | Appendix F.1 |
+| `MAX_PACKAGE_BYTES` | 500 MiB | Section 8.4 |
+| `MAX_RESPONSE_PAGES` | 100 | Section 3.4 |
+| `MAX_RESPONSE_BYTES` | 25 MiB | Section 3.4 |
+| `SIGNATURE_MAX_APPEND_BYTES` | 2 MiB | Section 3.4 |
+| `RESPONSE_SIGNATURE_LEVELS` | `QESig` | Section 3.4 |
+| `REQUIRE_QUALIFIED_TIMESTAMP` | `true` | Section 3.4 |
+| `TRUST_SNAPSHOT_MAX_DAYS` | 7 | Appendix E.3 |
+| `ZIP_MAX_ENTRIES` | 200 | Section 7.4 |
+| `ZIP_MAX_TOTAL_BYTES` | 500 MiB | Section 7.4 |
+| `ZIP_MAX_RATIO` | 100 | Section 7.4 |
+| `ZIP_MAX_DEPTH` | 2 | Section 7.4 |
+| `MAGIKA_MIN_SCORE` | 0.90 | Section 7.2 |
+| `TEXT_FALLBACK_ENCODINGS` | Not yet defined | Section 7.3 |
+| `OCR_LANG` | Set per deployment, for example `eng` or `ron` | Appendix D.1 |
+| `ALLOW_FAILED_AS_UNSIGNED` | `false` | Section 3.3 |
+| `ACK_TIMEOUT_MINUTES` | 30 | Section 3.2 |
+| `RELEASE_EXPIRY_DAYS` | 7 | Section 3.5 |
+| `SECOND_APPROVAL_DOMAINS` | Set by the service owner (section 12.1) | Section 3.5 |
+| `SENSITIVE_ALLOW_EMAIL` | `false` | Section 3.5 |
+| `OUTTAKE_MAX_MINUTES` | 60 | Section 5.2 |
+| `EVIDENCE_RETENTION_DAYS` | Set by the records owner | Section 12.1 |
+| `SIGNED_PDF_PASSTHROUGH_ENABLED` | `false` | [Passthrough design](document-exchange-signed-pdf-passthrough.md) |
+| `SIGNED_PDF_RETURN_ENABLED` | `false` | [Passthrough design](document-exchange-signed-pdf-passthrough.md) |
+| `SIGNED_PDF_TRUST_ANCHORS` | Chosen at activation | [Passthrough design](document-exchange-signed-pdf-passthrough.md) |
 
 ## Appendix B. Data model
 
@@ -1548,7 +1587,7 @@ The POC runs 11 containers on one Docker host with Docker Compose. The two sanit
 - **Use only the folders for files.** `dxg-drop` writes to `./folders/intake`, and released PDFs appear in `./folders/outtake/ready/`. The consoles handle decisions, not file transfer.
 - **Restrict `./folders/outtake`,** because it holds decrypted test responses.
 
-The MVP moves each container or stack to its own VM, and adds `ext-mail-adapter` as a separate component. It reaches the internet, so it must hold no keys or database access, and it shares only the intake and outtake folders. Package formats and flows stay the same.
+The MVP moves each container or stack to its own VM, and adds `ext-mail-adapter` as a separate component (section 4.2). Package formats and flows stay the same.
 
 ## Appendix F. PDF check scripts
 
