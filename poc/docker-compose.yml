@@ -68,9 +68,15 @@ services:
     <<: *app
     image: dxg/int-app:poc
     ports: ["127.0.0.1:8081:8080"]
-    networks: [int-core, int-sanitize, int-validate, int-to-import, int-to-export]
+    networks: [int-core, int-sanitize, int-validate, int-verify, int-to-export]
     volumes: [int-documents:/srv/dxg/documents]
-    secrets: [int_package_sign, int_import_enc, sftp_int, agent_int]
+    secrets: [int_package_sign, sftp_int, agent_int, verifier_int]
+
+  int-verifier:
+    <<: *app
+    image: dxg/int-verifier:poc
+    networks: [int-verify, int-to-import]
+    secrets: [int_import_enc, sftp_int_import]
 
   int-postgres:
     image: postgres:16
@@ -100,6 +106,7 @@ networks:
   int-to-export: { internal: true }
   int-core: { internal: true }
   int-validate: { internal: true }
+  int-verify: { internal: true }
   ext-sanitize:
     internal: true
     driver_opts:
@@ -132,3 +139,5 @@ secrets:
   int_db_password: { file: ./secrets/int-db-password }
   sftp_int: { file: ./secrets/sftp-int }
   agent_int: { file: ./secrets/agent-int }
+  sftp_int_import: { file: ./secrets/sftp-int-import }
+  verifier_int: { file: ./secrets/verifier-int }

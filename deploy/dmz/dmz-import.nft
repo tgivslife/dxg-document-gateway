@@ -2,14 +2,14 @@
 flush ruleset
 
 define EXT_CORE = 10.10.10.10
-define INT_CORE = 10.20.10.10
+define INT_VERIFIER = 10.20.10.11
 
 table inet filter {
     chain input {
         type filter hook input priority 0; policy drop;
         iif "lo" accept
         ct state established,related accept
-        ip saddr { $EXT_CORE, $INT_CORE } tcp dport 22 ct state new accept
+        ip saddr { $EXT_CORE, $INT_VERIFIER } tcp dport 22 ct state new accept
     }
     chain forward {
         type filter hook forward priority 0; policy drop;

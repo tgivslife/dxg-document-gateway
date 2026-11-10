@@ -160,6 +160,7 @@ Each requirement has an ID that stays the same when this document changes. The s
 | SR-12 | A decrypted response reaches the outtake folder only after an authorized release |
 | SR-13 | A signed response must be the approved PDF with only signature data added |
 | SR-14 | Decrypted responses never reach a validator that parses hostile files |
+| SR-15 | On the internal side, packages from the DMZ are collected, parsed and decrypted only by a component that has no console, no database and no response signing key |
 
 ## 3. How it works
 
@@ -201,13 +202,13 @@ The columns are network zones, not machines. Each arrow points from the side tha
 
 An adapter drops each request into the intake folder. Untrusted files are opened only on `ext-sanitizer`. An operator chooses what to send, each chosen file is flattened to PDF, and the internal side collects the package.
 
-Follow the numbers. Each box names the container or VM that does the work, and orange boxes with double side borders are VMs. Arrows show the order of work, not network connections: `ext-app` and `int-app` make every call, and the DMZ never connects to either network.
+Follow the numbers. Each box names the container or VM that does the work, and orange boxes with double side borders are VMs. Arrows show the order of work, not network connections: `ext-app`, `int-app` and `int-verifier` make every call, and the DMZ never connects to either network.
 
 ```mermaid
 flowchart LR
     accDescr: Numbered document flow for a request coming in, from the intake folder to int-app
     %% Arrows show the order of work, not network connections.
-    %% ext-app and int-app make every call. The DMZ never connects to either network.
+    %% ext-app, int-app and int-verifier make every call. The DMZ never connects to either network.
     %% Double side borders: VM.
     %% Arrows link the zones, not the steps, so that each zone keeps its own top-down layout.
 
@@ -239,16 +240,18 @@ flowchart LR
 
     subgraph INT["Internal network"]
         direction TB
-        N9["<b>9. int-app</b><br/>Verifies the package,<br/>checks every PDF,<br/>stores the documents"]
+        N9["<b>9. int-verifier</b><br/>Collects and verifies<br/>the package,<br/>checks every PDF"]
+        N10["<b>10. int-app</b><br/>Stores the documents"]
+        N9 --> N10
     end
 
     OUT -->|"Placed in the<br/>intake folder"| EXT
     EXT -->|"Uploaded<br/>by ext-app"| DMZ
-    DMZ -->|"Collected<br/>by int-app"| INT
+    DMZ -->|"Collected<br/>by int-verifier"| INT
 
     classDef step fill:#eef0fb,stroke:#7b7fc4,color:#1f1f1f
     classDef vm fill:#fbe3d9,stroke:#c8642e,stroke-width:2px,color:#1f1f1f
-    class SRC,N1,N2,N4,N5,N7,N8,N9 step
+    class SRC,N1,N2,N4,N5,N7,N8,N9,N10 step
     class N3,N6 vm
     style OUT fill:#f3f3f3,stroke:#9a9a9a
     style EXT fill:#eaf2fb,stroke:#8fb4e0
@@ -272,6 +275,7 @@ sequenceDiagram
     participant EV as ext-validator
     participant DI as dmz-import
     participant DE as dmz-export
+    participant IVF as int-verifier
     participant IC as int-app
 
     A->>EC: Complete drop in the intake folder
@@ -295,8 +299,15 @@ sequenceDiagram
     ES-->>EC: Flattened PDFs and normalized text
     Note over EC: Check PDFs, build package,<br/>sign, encrypt
     EC->>DI: Upload, then rename into place
-    IC->>DI: Download and delete
-    Note over IC: Verify package and PDFs,<br/>store documents
+    IC->>IVF: fetch
+    IVF->>DI: Download and delete
+    Note over IVF: Verify envelope and payload hash
+    IVF-->>IC: Envelope
+    Note over IC: Check sequence and request state
+    IC->>IVF: open
+    Note over IVF: Decrypt, verify,<br/>check every PDF
+    IVF-->>IC: Documents and manifest
+    Note over IC: Store documents
     IC->>DE: Upload ack, then rename into place
     EC->>DE: Download ack and delete
     Note over EC: Verify ack, mark the<br/>request as delivered
@@ -311,7 +322,8 @@ Steps in detail, with the step numbers from the first diagram:
 - **Step 6, flatten.** `ext-sanitizer` flattens each selected document and normalizes each selected text file.
 - **Step 7, check and package.** The PDF policy (appendix F) checks each flattened PDF in a restricted container on `ext-core`. `ext-app` then builds the package from section 8.
 - **Step 8, transfer.** `ext-app` uploads the package to `dmz-import`.
-- **Step 9, receive.** `int-app` collects the package, verifies it in the order in section 8.4, stores the documents and sends an `ack`.
+- **Step 9, receive.** `int-verifier` collects the package and verifies it in the order in section 8.4. `int-app` asks for each step and checks the sequence number and request state in between (appendix D.5).
+- **Step 10, store.** `int-app` stores the documents and sends an `ack`.
 
 If the internal side reports a rejection, or no `ack` arrives within `ACK_TIMEOUT_MINUTES`, the request is flagged for an operator to resend.
 
@@ -377,7 +389,7 @@ The flow diagram reads like the incoming one: arrows show the order of work, not
 flowchart LR
     accDescr: Numbered document flow for a response going out, from the author to the recipient
     %% Arrows show the order of work, not network connections.
-    %% ext-app and int-app make every call. The DMZ never connects to either network.
+    %% ext-app, int-app and int-verifier make every call. The DMZ never connects to either network.
     %% Double side borders: VM.
     %% Arrows link the zones, not the steps, so that each zone keeps its own top-down layout.
 
@@ -443,6 +455,7 @@ sequenceDiagram
     participant IC as int-app
     participant IS as int-sanitizer
     participant IV as int-validator
+    participant IVF as int-verifier
     participant DE as dmz-export
     participant DI as dmz-import
     participant EC as ext-app
@@ -465,7 +478,9 @@ sequenceDiagram
     Note over EC: Verify envelope, request ID<br/>and sequence, without decrypting
     Note over EC: Place in release queue
     EC->>DI: Upload ack, then rename into place
-    IC->>DI: Download ack and delete
+    IC->>IVF: fetch
+    IVF->>DI: Download ack and delete
+    IVF-->>IC: Verified ack
     Note over IC: Mark the response as sent
 ```
 
@@ -617,6 +632,7 @@ flowchart TB
     subgraph INT["Internal network"]
         INTUSERS{{"Author, approver<br/>and signer"}}
         INTCORE["int-core stack: 2 containers<br/>int-app, int-postgres"]
+        INTVER["int-verifier<br/>Collects and checks packages"]
         INTSAN[["int-sanitizer VM<br/>Dangerzone"]]
         INTVAL["int-validator<br/>DSS"]
     end
@@ -632,7 +648,8 @@ flowchart TB
     EGRESS -->|"F6 Allowlisted hosts only"| TRUST
     EXTCORE -->|"F7 Upload imports,<br/>acks, status"| DMZI
     EXTCORE -->|"F7 Collect responses<br/>and acks"| DMZE
-    INTCORE -->|"F8 Collect imports, acks, status"| DMZI
+    INTVER -->|"F14 Collect imports, acks, status"| DMZI
+    INTCORE -->|"F15 Fetch verified packages"| INTVER
     INTCORE -->|"F8 Upload responses and acks"| DMZE
     INTUSERS -->|"F2 Console"| INTCORE
     INTCORE -->|"F9 Flatten drafts, extract text"| INTSAN
@@ -647,7 +664,7 @@ flowchart TB
     classDef vm fill:#fbe3d9,stroke:#c8642e,stroke-width:2px,color:#1f1f1f
     classDef service fill:#eef0fb,stroke:#7b7fc4,color:#1f1f1f
     classDef people fill:#ffffff,stroke:#666666,color:#1f1f1f
-    class EXTVAL,RESPVAL,EGRESS,DMZI,DMZE,INTVAL container
+    class EXTVAL,RESPVAL,EGRESS,DMZI,DMZE,INTVAL,INTVER container
     class EXTCORE extStack
     class INTCORE intStack
     class EXTSAN,INTSAN vm
@@ -690,12 +707,15 @@ The POC runs the two sanitizers in VMs and everything else in Docker containers 
 
 **DMZ**
 
-**`dmz-import`, `dmz-export`**. One SFTP-only server per direction (SR-08), built from OpenSSH and nftables (appendix E.5). They accept F7 and F8 and open no connections. They hold only signed, encrypted packages, so a compromised DMZ host can delete or delay packages but cannot read or forge them.
+**`dmz-import`, `dmz-export`**. One SFTP-only server per direction (SR-08), built from OpenSSH and nftables (appendix E.5). They accept F7, F8 and F14 and open no connections. They hold only signed, encrypted packages, so a compromised DMZ host can delete or delay packages but cannot read or forge them.
 
 **Internal network**
 
-**`int-app`** (in `int-core`). Internal web app: collects and verifies packages, stores documents, and runs drafting, approval, the signing upload, DLP and response packaging.
-- Software: Laravel, Vue, OpenSSL. Holds: `int-import-enc`, `int-package-sign`, SFTP and agent keys, database credentials. Connections: F2 in; F8, F9, F11 out. No route to the external network or the internet.
+**`int-app`** (in `int-core`). Internal web app: stores verified documents, and runs drafting, approval, the signing upload, DLP and response packaging.
+- Software: Laravel, Vue, OpenSSL. Holds: `int-package-sign`, SFTP, agent and verifier keys, database credentials. Connections: F2 in; F8, F9, F11, F15 out. No route to the external network or the internet.
+
+**`int-verifier`**. The only internal component that connects to `dmz-import` and parses what arrives from it. It collects packages, verifies and decrypts them, and checks every PDF (SR-15). `int-app` drives it through a forced-command interface (appendix D.5).
+- Software: a small agent, OpenSSL, the PDF checks (appendix F). Holds: `int-import-enc` and the SFTP key for `dmz-import`. It has no console, no database and no response signing key. Connections: F15 in; F14 out. Kept apart from `int-app` so that a flaw in the SFTP client, the tar reader, CMS parsing or PDF parsing does not land in the component that holds the internal documents and the response signing key.
 
 **`int-sanitizer`** (VM). Dangerzone behind the same kind of agent: flattens response drafts and extracts their text for DLP. Connections: F9 in, nothing out. Separate from `ext-sanitizer`, because one VM serving both networks would be a path between them.
 
@@ -727,12 +747,13 @@ Confirm licenses again when pinning versions.
 | Key | Holder | Purpose |
 | --- | --- | --- |
 | `ext-package-sign` | `ext-app` | Sign imports, acks and status packages |
-| `int-import-enc` | `int-app` | Decrypt import payloads |
+| `int-import-enc` | `int-verifier` | Decrypt import payloads |
 | `int-package-sign` | `int-app` | Sign response packages and acks |
 | `ext-release-enc` | `ext-release` | Decrypt responses at release |
 | `ext-dss-client` | `ext-app` | Authenticate to DSS |
-| `sftp-ext-*`, `sftp-int-*` | `ext-app`, `int-app` | Separate SSH keys per host and direction |
+| `sftp-ext-*`, `sftp-int-*` | `ext-app`, `int-app`, `int-verifier` | Separate SSH keys per host and direction. `int-verifier` holds the key for `dmz-import`, and `int-app` the key for `dmz-export` |
 | `agent-ext`, `agent-int` | `ext-app`, `int-app` | Run agent commands |
+| `verifier-int` | `int-app` | Run verifier commands |
 
 Rules:
 
@@ -767,14 +788,16 @@ The matrix names hosts, so it says `ext-core` for both `ext-app` and `ext-releas
 | F5 | `ext-validator` | `ext-egress` | 3128 | Trust lists, OCSP, CRL, TSA |
 | F6 | `ext-egress` | Allowlisted hosts | 80, 443 | Same traffic, after filtering |
 | F7 | `ext-core` | `dmz-import`, `dmz-export` | 22 | Push packages, pull packages, collect DMZ logs |
-| F8 | `int-core` | `dmz-import`, `dmz-export` | 22 | Pull packages, push packages |
+| F8 | `int-core` | `dmz-export` | 22 | Push packages |
 | F9 | `int-core` | `int-sanitizer` | 22 | Run agent commands |
 | F10 | `ext-core` | `ext-egress` | 3128 | ClamAV definition updates |
 | F11 | `int-core` | `int-validator` | 8443 | DSS REST calls |
 | F12 | `ext-core` | `ext-response-validator` | 8443 | DSS REST calls at release |
 | F13 | `ext-response-validator` | `ext-egress` | 3128 | Trust lists, OCSP, CRL, TSA |
+| F14 | `int-verifier` | `dmz-import` | 22 | Pull packages |
+| F15 | `int-core` | `int-verifier` | 22 | Run verifier commands |
 
-`ext-sanitizer`, `int-sanitizer`, `int-validator` and both DMZ hosts have no outbound rules. `int-core` has no route to the external network or the internet.
+`ext-sanitizer`, `int-sanitizer`, `int-validator` and both DMZ hosts have no outbound rules. `int-verifier` has one, F14. `int-core` has no route to the external network or the internet.
 
 In the POC, the two console ports are published only on the Docker host's loopback address.
 
@@ -901,7 +924,8 @@ Section 6.1 lists what can go wrong and what limits the damage. Section 6.2 list
 | Altered response after approval | Append and page content checks on the internal side, prefix and signature checks at release | A signature appearance can carry a small amount of hidden data, within the size limit |
 | Compromised or faulty adapter | Separate accounts, strict drop validation, no access to keys or evidence | Adapter can submit unwanted requests, and can read its own outtake channel |
 | Replay or reordering | Unique package IDs, per-direction sequence numbers | Delay is possible |
-| SSH client attack from DMZ | Minimal SFTP client, restricted user on `int-core`, patching | Residual risk until a hardware diode replaces the path |
+| SSH client attack from DMZ | The client that downloads from the DMZ runs on `int-verifier`, which has no console, database or response signing key. `int-app` only uploads. Minimal SFTP client, patching | Residual risk until a hardware diode replaces the path |
+| Compromised `int-verifier` | No console, database or response signing key, one outbound flow, output read by `int-app` with a strict reader | Attacker can read import payloads, and can hand `int-app` a forged document that users then open |
 | Signed PDF manipulation | Strict DSS policy, signed revision used for sanitization | Hidden content in a signed revision is rendered as it appears in that revision |
 
 ### 6.2 Known limitations
@@ -1025,6 +1049,8 @@ The receiver stops at the first failure, keeps the package in a rejected folder,
 10. Validate the manifest, and compare every file hash.
 11. Run the PDF policy check in a restricted container, using `output` mode for sanitized imports and `signed` mode for responses.
 
+On the internal side, `int-verifier` runs steps 1 to 4, 6 and 8 to 11. `int-app` runs steps 5 and 7 between them, because only `int-app` has the database (appendix D.5). On the external side, `ext-app` runs steps 1 to 7 at receipt and `ext-release` runs steps 8 to 11 at release (appendix D.4).
+
 A `seq` gap puts the channel in a blocked state and alerts an operator, who decides whether to accept the gap after checking for lost packages.
 
 ## 9. Operations
@@ -1079,6 +1105,7 @@ Back up both databases, the evidence store, configuration, and the audit hash ex
 | Flattening fails | Item rejected, with original kept in evidence | Ask the sender for another format |
 | DSS unavailable | Signed items stay queued | Restore DSS |
 | DMZ host unavailable | Packages stay on the sender | Rebuild DMZ host, and transfers resume |
+| `int-verifier` unavailable | Imports, acks and status packages wait on `dmz-import` | Restore the host, and collection resumes |
 | Package rejected | Package kept for analysis, and channel alert raised | Fix the cause, then resend with a new `package_id` and `seq` |
 | Sequence gap | Channel blocked | Operator checks both sides and accepts the gap, or resends |
 | Release send failure | Release moves to `failed` | Officer retries or chooses another channel |
@@ -1139,6 +1166,7 @@ Keep hostile samples in a controlled store on the external network only.
 | T-35 | Tar with extra names, links or traversal | Rejected by strict reader |
 | T-36 | Envelope carrying a `recipient` field | Rejected by schema |
 | T-45 | Package containing `originals/` or a `countersigned` response while the passthrough is disabled | Rejected with `feature_disabled` |
+| T-58 | Correctly signed import package holding a PDF that passes the forbidden-feature check but does not have the structure Dangerzone produces | Rejected by `int-verifier` |
 
 ### 10.4 Workflow and release tests
 
@@ -1179,6 +1207,7 @@ Keep hostile samples in a controlled store on the external network only.
 | T-54 | Sanitizer restored during a job | Job retried, with no duplicate package |
 | T-55 | Typical documents, measured per page and per file | Baseline recorded for time and output size |
 | T-56 | Largest expected file and peak daily volume | Queue clears within the agreed time |
+| T-57 | Connection from `int-verifier` to anything other than `dmz-import`, and from `dmz-import` to `int-core` | Blocked and logged |
 
 ### 10.7 MVP acceptance criteria
 
@@ -1194,11 +1223,11 @@ Keep hostile samples in a controlled store on the external network only.
 
 | Phase | Build | Exit criteria |
 | --- | --- | --- |
-| 1. Import POC | Intake folder, `dxg-drop`, agent, screening, Dangerzone, basic console, DMZ transfer, internal verification | T-01 to T-16, T-30 to T-36 and T-45 pass |
+| 1. Import POC | Intake folder, `dxg-drop`, agent, screening, Dangerzone, basic console, DMZ transfer, `int-verifier` | T-01 to T-16, T-30 to T-36, T-45 and T-58 pass |
 | 2. Signed PDFs | DSS, strict policy, evidence store, reports, review flow | T-20 to T-27 and T-46 pass |
 | 3. Response path | Internal workflow, flattening, DLP rules, approvals, PDF signing upload, `int-validator`, package signing and encryption | T-37, T-38 and T-60 to T-69 pass |
 | 4. Release console | Queue, policy rules, second approval, outtake folder | T-39 to T-44 pass |
-| 5. Hardening | Move from Docker to VMs, add the mail adapter, monitoring, backups, access review, procedures, separate hardware | T-17 and T-50 to T-56 pass |
+| 5. Hardening | Move from Docker to VMs, add the mail adapter, monitoring, backups, access review, procedures, separate hardware | T-17 and T-50 to T-57 pass |
 | 6. MVP sign-off | Independent penetration test and fixes | Section 10.7 met |
 | Optional | Signed PDF passthrough, then return, only after an activation decision | Section 9 of the [passthrough design](document-exchange-signed-pdf-passthrough.md) met |
 
@@ -1252,7 +1281,7 @@ A design review left these items open. Each needs a fix or a decision before or 
 High:
 
 1. **The append check covers only content streams** (appendix F.2). An update that replaces a page image or `/Resources` passes, and DSS does not see changes made in the signing update itself. This weakens SR-13.
-2. **The internal side relies on a denylist PDF check** (appendix F.1). A compromised external host could send a PDF with a hostile font or image and no forbidden key. Options: allowlist the Dangerzone output shape, or flatten imports again on `int-sanitizer`.
+2. **The allowlist PDF check is not written.** `int-verifier` must accept only the structure that Dangerzone produces (appendix D.5, T-58), but `pdf_policy.py` is still a denylist (appendix F.1). Until the allowlist exists, a compromised external host could send a PDF with a hostile font or image and no forbidden key. Write the allowlist from real Dangerzone output in phase 1.
 3. **Timestamp access is unresolved** (section 3.4). The DMZ proxy is an exception to rule 2 in section 1.1, and the internal timestamp authority in section 6 of the [passthrough design](document-exchange-signed-pdf-passthrough.md) would not meet `REQUIRE_QUALIFIED_TIMESTAMP`. The "signed after approval" check also needs a reliable internal clock.
 4. **The MVP mail adapter has no settled place.** Section 5.2 says the folders are not network shares and appendix E.8 makes the adapter a separate component, but appendix E.7 creates its user on `ext-core`.
 
@@ -1448,6 +1477,33 @@ For each call, it:
 
 The adapter's result in `outtake/results/` completes the release.
 
+### D.5 Internal verifier
+
+`int-app` runs `int-verifier` over SSH with a dedicated key and a forced command, in the same way as the sanitizer agent (appendix D.1). Only `int-verifier` connects to `dmz-import`.
+
+| Command | What it does | Output |
+| --- | --- | --- |
+| `fetch` | Downloads the next package from `dmz-import`, runs steps 1 to 4 and 6 of section 8.4, keeps the package and deletes the remote copy | `envelope.json`, or a JSON rejection with the reason |
+| `open <package_id>` | Runs steps 8 to 11 of section 8.4 on a kept package | Tar of the inner files |
+| `discard <package_id>` | Deletes a kept package | Nothing |
+
+For each package, `int-app`:
+
+1. Calls `fetch`.
+2. Checks that `package_id` is new, that `seq` is the next expected value, and the request state (steps 5 and 7).
+3. For an import, calls `open` and stores the documents. `ack` and `status` packages have no payload, so `fetch` is their whole check.
+4. Calls `discard`.
+5. Builds and signs the `ack` itself, and uploads it to `dmz-export`.
+
+Rules:
+
+- `int-verifier` holds `int-import-enc` and the SFTP key for `dmz-import`. It holds no response signing key and has no console or database.
+- F14 is its only outbound connection.
+- `open` and `discard` accept only a `package_id` that matches the UUID pattern in the envelope schema.
+- `int-app` reads tar output from `int-verifier` with the same strict reader it uses for the sanitizer agent. It relies on `int-verifier` for the signature checks.
+- Step 11 on `int-verifier` is where the allowlist check for incoming PDFs runs (section 12.2, issue 2).
+- Limits for every command are set as for the sanitizer agent.
+
 ## Appendix E. Deployment
 
 ### E.1 Base platform and sizing
@@ -1473,6 +1529,7 @@ For the POC, start with 8 vCPU, 16 GiB RAM and 200 GiB disk for the Docker conta
 | `ext-egress` | 1 | 1 GiB | 20 GiB |
 | `dmz-import`, `dmz-export` | 1 each | 1 GiB each | 100 GiB each |
 | `int-core` | 4 | 8 GiB | 200 GiB |
+| `int-verifier` | 2 | 4 GiB | 100 GiB |
 | `int-sanitizer` | 4 | 8 GiB | 60 GiB |
 | `int-validator` | 2 | 4 GiB | 40 GiB |
 
@@ -1515,7 +1572,7 @@ Log and deny everything else. A denied revocation host produces an `INDETERMINAT
 
 These settings are for the MVP VMs:
 
-- Host firewall, shown for `dmz-import` with example addresses: [`deploy/dmz/dmz-import.nft`](deploy/dmz/dmz-import.nft)
+- Host firewall, shown for `dmz-import` with example addresses: [`deploy/dmz/dmz-import.nft`](deploy/dmz/dmz-import.nft). `dmz-import` accepts `ext-core` and `int-verifier`. `dmz-export` accepts `ext-core` and `int-core`
 - SFTP settings for `sshd_config`: [`deploy/dmz/sshd-dxg.conf`](deploy/dmz/sshd-dxg.conf)
 - Directory setup: [`deploy/dmz/setup-xfer-dirs.sh`](deploy/dmz/setup-xfer-dirs.sh)
 
@@ -1562,7 +1619,7 @@ Implementation rules for these permissions:
 
 ### E.8 POC deployment with Docker
 
-The POC runs 11 containers on one Docker host with Docker Compose. The two sanitizers run in separate VMs. The `dxg/*` images are built by this project. Section 4.2 explains which containers are grouped and which must stay separate.
+The POC runs 12 containers on one Docker host with Docker Compose. The two sanitizers run in separate VMs. The `dxg/*` images are built by this project. Section 4.2 explains which containers are grouped and which must stay separate.
 
 **Compose file:** [`poc/docker-compose.yml`](poc/docker-compose.yml). Its paths, such as `./folders` and `./secrets`, are relative to `poc/`, and `.gitignore` keeps both out of the repository.
 
@@ -1582,8 +1639,8 @@ The POC runs 11 containers on one Docker host with Docker Compose. The two sanit
 **POC rules:**
 
 - **Use test data only.** Dangerzone is isolated in a VM, but `ext-validator` and `int-app` still share one kernel on the Docker host. A DSS exploit from a hostile PDF could cross between the networks.
-- **Docker networks do not enforce direction.** Containers on the same Docker network can reach each other's listening ports, whatever `ports:` publishes. Each DMZ container shares a network with `ext-app` and with `int-app`, so it could connect to either console. In the POC, each web server must therefore listen only on its address on its own stack network, `ext-core` or `int-core`, and not on all interfaces. The Compose file does not express this yet. Confirm it in phase 1 by trying to connect from each DMZ container to both consoles. The MVP firewall enforces direction properly.
-- **Run PDF checks as a restricted subprocess** in `ext-app` and `int-app`, so that these containers need no access to the Docker socket. The MVP uses a separate restricted container.
+- **Docker networks do not enforce direction.** Containers on the same Docker network can reach each other's listening ports, whatever `ports:` publishes. The DMZ containers share networks with `ext-app` and `int-app`, so one could connect to a console. In the POC, each web server must therefore listen only on its address on its own stack network, `ext-core` or `int-core`, and not on all interfaces. The Compose file does not express this yet. Confirm it in phase 1 by trying to connect from each DMZ container to both consoles. The MVP firewall enforces direction properly.
+- **Run PDF checks as a restricted subprocess** in `ext-app`, `int-app` and `int-verifier`, so that these containers need no access to the Docker socket. The MVP uses a separate restricted container.
 - **Restore the sanitizer VMs daily** from a clean snapshot.
 - **Use only the folders for files.** `dxg-drop` writes to `./folders/intake`, and released PDFs appear in `./folders/outtake/ready/`. The consoles handle decisions, not file transfer.
 - **Restrict `./folders/outtake`,** because it holds decrypted test responses.
@@ -1628,6 +1685,7 @@ Script: [`checks/signature_append_check.py`](checks/signature_append_check.py).
 | DSS REST paths, fields and signed-revision behavior | Read from DSS 6.5.1 source, **not executed**, because the build dependencies could not be downloaded in the test environment |
 | `sshd_config`, Squid guidance, tmpfs mount and host sizing | **Not tested** |
 | Adapters and the intake worker | Specified only, **not built** |
+| `int-verifier` and its commands | Specified only, **not built** |
 | Signed PDFs from other signing software | **Not tested**. Test signatures came from one library only |
 | Response signature rule with real qualified certificates and timestamps | **Not tested**. Tests used private test certificates, and DSS was not executed |
 | `pdf_policy.py output` against real Dangerzone output | **Not tested** |
