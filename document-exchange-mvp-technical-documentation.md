@@ -100,7 +100,7 @@ Section 2.2 turns these rules into security requirements. Section 3.6 defines on
 | Outtake folder | Where every released response leaves the pipeline |
 | Passthrough | The optional transfer of an incoming signed PDF without flattening (section 3.6) |
 
-Appendix E.6 lists the roles, such as operator, release officer, approver and signer. An author is the internal user who drafts a response.
+Appendix E.6 lists the roles, such as operator, release officer, author, approver and signer.
 
 **Abbreviations**
 
@@ -163,7 +163,7 @@ Each requirement has an ID that stays the same when this document changes. The s
 | SR-13 | A signed response must be the approved PDF with only signature data added |
 | SR-14 | Decrypted responses never reach a validator that parses hostile files |
 | SR-15 | On the internal side, packages from the DMZ are collected, parsed and decrypted only by a component that has no console, no database and no package signing key (`int-package-sign`) |
-| SR-16 | The key that decrypts responses, and every decrypted response, stay off the host that runs the external web application |
+| SR-16 | The key that decrypts responses stays off the host that runs the external web application. So does every decrypted response, except a manual-channel file while an officer downloads it through the console |
 | SR-17 | The external console is reachable only from workstations on the wired campus network |
 
 ## 3. How it works
@@ -304,7 +304,7 @@ sequenceDiagram
     Note over EC: Check PDFs, build package,<br/>sign, encrypt
     EC->>DI: Upload, then rename into place
     IC->>IVF: fetch
-    IVF->>DI: Download and delete
+    IVF->>DI: Download
     Note over IVF: Verify envelope and payload hash
     IVF-->>IC: Envelope
     Note over IC: Check sequence and request state
@@ -313,7 +313,8 @@ sequenceDiagram
     IVF-->>IC: Documents and manifest
     Note over IC: Store documents
     IC->>DE: Upload ack, then rename into place
-    EC->>DE: Download ack and delete
+    EC->>DE: Download ack
+    EC->>DI: Delete the acknowledged package
     Note over EC: Verify ack, mark the<br/>request as delivered
 ```
 
@@ -324,7 +325,7 @@ Steps in detail, with the step numbers from the first diagram:
 - **Step 4, select.** The operator sees sender, subject, normalized body, file name, detected type, size and scan result. The console does not render attachments.
 - **Step 5, validate.** Signed PDFs follow section 3.3.
 - **Step 6, flatten.** `ext-sanitizer` flattens each selected document and normalizes each selected text file.
-- **Step 7, check and package.** The PDF policy (appendix F) checks each flattened PDF in a restricted container on `ext-core`. `ext-app` then builds the package from section 8.
+- **Step 7, check and package.** The PDF policy (appendix F) checks each flattened PDF in a restricted container on `ext-core`. `ext-app` then builds the package from section 8. If the package would exceed `MAX_PACKAGE_BYTES`, `ext-app` builds nothing. The request returns to selection, the console says that the selection is too large, and the operator sends fewer items.
 - **Step 8, transfer.** `ext-app` uploads the package to `dmz-import`.
 - **Step 9, receive.** `int-verifier` collects the package and verifies it in the order in section 8.4. `int-app` asks for each step and checks the sequence number and request state in between (appendix D.5).
 - **Step 10, store.** `int-app` stores the documents and sends an `ack`.
@@ -365,6 +366,7 @@ flowchart TB
 Rules:
 
 - Sanitizing breaks a signature, so validation always happens first.
+- When the signature is in the first revision of the file, DSS returns no earlier revision. If the result is `TOTAL_PASSED` with full scope, the whole file is flattened. In any other case the item goes to operator review.
 - The original stays in the evidence store on the external network. By default, it does not reach the internal network.
 - `INDETERMINATE` often means an unknown trust anchor, missing revocation data, or a temporary outage. An operator decides, and the package records `review_accepted` rather than `passed`.
 - `TOTAL_FAILED` is a rejection. `ALLOW_FAILED_AS_UNSIGNED` can allow an operator to forward the document as unsigned, and defaults to `false`.
@@ -377,6 +379,7 @@ DSS returns the revision **before** the chosen signature was added. The sanitize
 | Indication | Signature scope | Action | State sent to the internal side |
 | --- | --- | --- | --- |
 | `TOTAL_PASSED` | Full | Continue | `passed` |
+| `TOTAL_PASSED` | Full, and DSS returns no earlier revision | Flatten the whole file | `passed` |
 | `TOTAL_PASSED` | Partial | Operator review | `review_accepted` if accepted |
 | `INDETERMINATE` | Any | Operator review | `review_accepted` if accepted |
 | `TOTAL_FAILED` | Any | Reject | None |
@@ -478,12 +481,13 @@ sequenceDiagram
     IV-->>IC: Validation result and report
     Note over IC: Sign manifest, encrypt,<br/>sign envelope
     IC->>DE: Upload, then rename into place
-    EC->>DE: Download and delete
+    EC->>DE: Download
     Note over EC: Verify envelope, request ID<br/>and sequence, without decrypting
     Note over EC: Place in release queue
     EC->>DI: Upload ack, then rename into place
     IC->>IVF: fetch
-    IVF->>DI: Download ack and delete
+    IVF->>DI: Download ack
+    IC->>DE: Delete the acknowledged package
     IVF-->>IC: Verified ack
     Note over IC: Mark the response as sent
 ```
@@ -579,7 +583,7 @@ Release rules:
 - In the MVP, the mail adapter uses a fixed template, and `In-Reply-To` comes from the stored original message, through `channel_data`.
 - The adapter compares the file hash with `delivery.json` immediately before delivery.
 
-Delivery status stays on the external network. Only an enumerated status (`released`, `expired`, `bounced`) goes to the internal side, as a `status` package with no free text.
+Delivery status stays on the external network. Only an enumerated status (`released` or `expired`) goes to the internal side, as a `status` package with no free text.
 
 ### 3.6 Signed PDF passthrough (reserved)
 
@@ -622,7 +626,7 @@ flowchart TB
 
     subgraph EXT["External network"]
         EXTUSERS{{"Operator, release officer<br/>and release approver"}}
-        EXTCORE["ext-core stack: 2 containers<br/>ext-app, ext-postgres"]
+        EXTCORE["ext-core stack: 3 containers<br/>ext-proxy, ext-app,<br/>ext-postgres"]
         EXTREL["ext-release<br/>Decrypts at release,<br/>holds the outtake folder"]
         EXTSAN[["ext-sanitizer VM<br/>Dangerzone, ClamAV"]]
         EXTVAL["ext-validator<br/>DSS"]
@@ -637,7 +641,7 @@ flowchart TB
 
     subgraph INT["Internal network"]
         INTUSERS{{"Author, approver<br/>and signer"}}
-        INTCORE["int-core stack: 2 containers<br/>int-app, int-postgres"]
+        INTCORE["int-core stack: 3 containers<br/>int-proxy, int-app,<br/>int-postgres"]
         INTVER["int-verifier<br/>Collects and checks packages"]
         INTSAN[["int-sanitizer VM<br/>Dangerzone"]]
         INTVAL["int-validator<br/>DSS"]
@@ -696,9 +700,11 @@ The POC runs the two sanitizers in VMs and everything else in Docker containers 
 **`ext-app`** (in `ext-core`). External web app: operator and release console, intake worker, workflow and packaging. These share one container because they share code and trust level. The console is reachable only from workstations on the wired campus network (SR-17).
 - Software: Laravel, Vue, OpenSSL. Holds: `ext-package-sign`, the DSS client key, SFTP, spool and agent keys, the `release-ext` key that starts a release, database credentials, the evidence store. Connections: F1 in; F3, F4, F7, F10, F16 and A1 out.
 
-**`ext-release`**. The release service: decrypts an approved response at release, runs the final checks (appendix D.4) and writes the file to the outtake folder. In the MVP it runs on its own VM, apart from `ext-core`, and the outtake folder is on that VM (SR-16). Root on `ext-core` can then read neither the release key nor a decrypted response.
+**`ext-release`**. The release service: decrypts an approved response at release, runs the final checks (appendix D.4) and writes the file to the outtake folder. In the MVP it runs on its own VM, apart from `ext-core`, and the outtake folder is on that VM (SR-16). Root on `ext-core` can then read neither the release key nor a decrypted response. The one exception is a manual-channel file, which passes through `ext-app` while an officer downloads it.
 - Holds: `ext-release-enc`, the release decryption key, as its only holder, its own DSS client key, spool keys and database credentials, and the outtake folder. Connections: F16 in; F12, F17 and A2 out.
 - It accepts the approvals that `ext-app` recorded in the database, and cannot check them itself (section 6.2).
+
+**`ext-proxy`, `int-proxy`** (in `ext-core` and `int-core`). A small reverse proxy in front of each console. It terminates TLS, holds the console certificate, and forwards only to its web application. It is the only container in its stack with a published port.
 
 **`ext-postgres`, `int-postgres`**. Database and job queue for each side, with the hash-chained audit log (appendix B). The job queue is Laravel's database queue, so DXG needs no separate queue server. Reachable only inside its stack, except that `ext-release` reaches `ext-postgres` (F17).
 
@@ -763,7 +769,7 @@ Confirm licenses again when pinning versions.
 | `ext-dss-client` | `ext-app` | Authenticate to `ext-validator` |
 | `ext-release-dss-client` | `ext-release` | Authenticate to `ext-response-validator` |
 | `int-dss-client` | `int-app` | Authenticate to `int-validator` |
-| `ext-console-tls`, `int-console-tls` | `ext-app`, `int-app` | TLS server certificates for the two consoles |
+| `ext-console-tls`, `int-console-tls` | `ext-proxy`, `int-proxy` | TLS server certificates for the two consoles |
 | `sftp-ext-*`, `sftp-int-*` | `ext-app`, `int-app`, `int-verifier` | Separate SSH keys per host and direction. `int-verifier` holds the key for `dmz-import`, and `int-app` the key for `dmz-export` |
 | `agent-ext`, `agent-int` | `ext-app`, `int-app` | Run agent commands |
 | `verifier-int` | `int-app` | Run verifier commands |
@@ -774,7 +780,7 @@ Rules:
 
 - Use separate signing and encryption keys. Use P-256 or stronger, and a validity of one year or less.
 - Pin the exact peer signing certificate on each side, in addition to chain validation. Roll certificates through a planned overlap period.
-- Store private keys on the host only with file permissions in the POC. The MVP target for `ext-release-enc` and `int-package-sign` is a hardware token or HSM through PKCS#11.
+- Store private keys in files that one service user can read, in the POC and in the MVP. Hardware protection is in the backlog (section 11.2).
 - A root CA for this system should be offline. It may be a dedicated private CA used only for DXG.
 
 Qualified certificates used to sign response PDFs are outside DXG. They are held on the signer's qualified device or service, and they are not package keys.
@@ -845,7 +851,9 @@ Every adapter follows the same three small formats: a drop on the way in, and a 
 /srv/dxg/outtake/                 Mounted as tmpfs in the MVP
   .incoming/<release-id>/         Release service is still writing
   ready/<channel>/<release-id>/   Waiting for that channel's adapter
-  results/<release-id>.json       Delivery result written by the adapter
+
+/srv/dxg/outtake-results/         On disk. A result holds no document content
+  <release-id>.json               Delivery result written by the adapter
 ```
 
 **How an adapter attaches.** There are two ways, and the formats are the same in both.
@@ -860,13 +868,13 @@ With a spool, `ext-app` and `ext-release` do all the collecting and delivering:
 - `ext-app` collects complete drops from the spool and places them in the intake folder (flow A1).
 - `ext-release` uploads each delivery item for that channel from the outtake folder to the spool, deletes its local copy, and collects the result (flow A2).
 - The adapter host cannot open a connection to `ext-core` or `ext-release`. It holds no keys and has no database access.
-- The transfer rules are those of the DMZ hosts: upload under a temporary name, rename when complete, and the receiver deletes after it has checked the size and hash.
+- A file is uploaded under a temporary name and renamed when complete. `ext-app` deletes a drop from the spool after it has checked the size and hash.
 
 ```text
 /srv/spool/
   in/<request-id>/                Complete drops, collected by ext-app
   out/<release-id>/               Delivery items, uploaded by ext-release. On tmpfs
-  results/<release-id>.json       Delivery results, collected by ext-release
+  results/<release-id>.json       Delivery results, collected by ext-release. On disk
 ```
 
 **Channels.** A channel is one way out. Each has one entry in the channel registry, which is configuration on the external side:
@@ -887,7 +895,7 @@ Adapters and channels in the POC and MVP:
 | Adapter | Direction | Attachment | Recipient format | Sensitive allowed | Second-approval rule | Channel data |
 | --- | --- | --- | --- | --- | --- | --- |
 | `dxg-drop` (POC) | In | Local | | | | |
-| `manual` | Out | Local | Name of the person who collects the file | Yes | None | None |
+| `manual` | Out | Local on `ext-release`. The officer downloads the file through the console | Name of the person who receives the file | Yes | None | None |
 | `mail` (MVP) | In | Spool on `ext-mail-adapter` | | | | |
 | `email` (MVP) | Out | Spool on `ext-mail-adapter` | Email address | `SENSITIVE_ALLOW_EMAIL`, default `false` | Domains in `SECOND_APPROVAL_DOMAINS`, or every domain when the list is `*` | `subject`, `reply_to_message_id` |
 
@@ -974,7 +982,7 @@ The adapter checks `expires_at` and the file hash, delivers the file, writes a r
 - Adapters run as separate service accounts, and each outtake adapter reads only its own channel.
 - Adapters have no access to package keys, the database or the evidence store.
 - An adapter that connects to another network runs on its own host with a spool. It never runs on `ext-core` or `ext-release`.
-- Only the release service writes to the outtake folder and to a spool's `out/` folder, and only after an authorized release. The one exception is `results/`, which adapters write.
+- Only the release service writes to the outtake folder and to a spool's `out/` folder, and only after an authorized release. Adapters write their results to a separate folder, which is on disk.
 - `delivery.json` never comes from the internal network.
 - In the MVP, the outtake folder and every spool's `out/` folder are tmpfs mounts, because they hold decrypted responses. Items older than `OUTTAKE_MAX_MINUTES` are deleted and the release moves to `failed`.
 - A watched network share is an adapter that copies files in. It is never the intake folder itself.
@@ -998,7 +1006,7 @@ Section 6.1 lists what can go wrong and what limits the damage. Section 6.2 list
 | Disguised file type | Content-based detection, and agreement with the file extension | Rare polyglot files, which are flattened anyway |
 | ZIP bomb or path traversal | Unpacking limits, generated file names, disposable host | Resource exhaustion on the isolated host only |
 | Compromised `ext-sanitizer` | No keys or credentials, output treated as untrusted, restricted PDF check on the external side, full verification on the internal side | A forged but well-formed PDF with false visible content |
-| Compromised `ext-core` | The release key and decrypted responses are on `ext-release`. The console is reachable only from the wired campus network. The internal side verifies every import and re-checks every PDF | Attacker can read every collected request, the evidence store and queued imports, and can sign packages until the key is revoked. Attacker can also record false approvals, and so release any queued response to a recipient of their choice. Attacker cannot change a response |
+| Compromised `ext-core` | The release key and decrypted responses are on `ext-release`, except a manual-channel file while an officer downloads it. The console is reachable only from the wired campus network. The internal side verifies every import and re-checks every PDF | Attacker can read every collected request, the evidence store and queued imports, and can sign packages until the key is revoked. Attacker can also record false approvals, and so release any queued response to a recipient of their choice. Attacker cannot change a response |
 | Compromised DMZ host | Encryption, signatures, sequence numbers | Denial of service, and exposure of envelope metadata |
 | Forged validation report | Package signature, signing key held only by `ext-app` | The internal side trusts the external validator result, so `ext-core` compromise affects it |
 | Malware on the internal network leaking data | Response needs an open request, approval, DLP, size limits, flattening before signing, append check, no recipient control | Data hidden in page images cannot be reliably detected |
@@ -1036,6 +1044,8 @@ The default limits for this section are in appendix A.
 | Word | `.doc`, `.docx` | Macro check, Dangerzone | Flattened PDF |
 | Excel | `.xls`, `.xlsx` | Macro check, Dangerzone | Flattened PDF |
 | OpenDocument | `.odt`, `.ods` | Dangerzone | Flattened PDF |
+| Presentation | `.pptx`, `.odp` | Macro check, Dangerzone | Flattened PDF |
+| Rich text | `.rtf` | Dangerzone | Flattened PDF |
 | Image | `.jpg`, `.jpeg`, `.png`, `.tif`, `.tiff` | Dangerzone | Flattened PDF |
 | Plain text | `.txt` | Normalization (section 7.3) | UTF-8 text |
 | ZIP | `.zip` | Unpack (section 7.4), process each file | Per file |
@@ -1047,6 +1057,8 @@ The default limits for this section are in appendix A.
 - HTML, SVG, XML, LNK, ISO and other disk images
 - CSV, because of formula injection, until a value-only import exists
 - RAR, 7z and other archives
+- `winmail.dat` and `.heic` files
+- Mail encrypted with S/MIME, because its content cannot be inspected
 - Password-protected or malformed files, including anything Dangerzone cannot flatten
 - Any file whose detected type and extension do not agree
 
@@ -1081,6 +1093,18 @@ For HTML-only messages, the agent extracts text and discards all markup. Links s
 - Never use the name inside the ZIP as a path. Write each member under a generated ID and keep the name as display text only.
 - Each member becomes a new item and restarts screening from step 1.
 
+### 7.5 Mail messages
+
+These rules apply to every `raw_mail` file, whichever adapter dropped it.
+
+- **Signed mail.** S/MIME-signed mail is processed like any other mail. The console marks it "signature not checked".
+- **Attached messages.** A message attached to a message is unpacked like a ZIP, with the same nesting limit. Its attachments become items.
+- **Inline images.** They are listed as items, and are not selected by default.
+- **Sender checks.** The console shows the mail server's own SPF, DKIM and DMARC result line as untrusted text. DXG does not compute these results.
+- **Reply hint.** The suggested recipient is the Reply-To address when the message has one, and the From address otherwise. The console shows both.
+
+Presentations and rich text files are allowed only if phase 1 confirms that Dangerzone flattens them reliably (section 11.1).
+
 ## 8. Transfer packages
 
 ### 8.1 Layout
@@ -1096,7 +1120,7 @@ payload.cms          Optional. Encrypted CMS containing a signed inner tar
 The inner tar contains fixed names only.
 
 ```text
-Import:   manifest.json, body.txt, documents/NNNNNN.pdf, documents/NNNNNN.txt,
+Import:   manifest.json, body.txt (only when the request has message text), documents/NNNNNN.pdf, documents/NNNNNN.txt,
           reports/NNNNNN.etsi.xml
 Response: manifest.json, signed.pdf, reports/signature.etsi.xml
 ```
@@ -1169,7 +1193,7 @@ Send application, host, firewall and proxy logs to a log store on each side. Int
 | OS and package patches | Monthly, urgent fixes as needed | Infrastructure |
 | Dangerzone template update | With every upstream release | Security or infrastructure |
 | ClamAV definitions, moved by `ext-app` to `ext-sanitizer` | Daily | Automated |
-| `ext-sanitizer` restored from a snapshot | Daily | Automated |
+| `ext-sanitizer` and `int-sanitizer` restored from a snapshot | Daily | Automated |
 | Allowlist and policy review | Quarterly | Security |
 | Backup restore test | Quarterly | Infrastructure |
 | Certificate rollover | Before expiry | PKI owner |
@@ -1186,7 +1210,7 @@ Back up both databases, the evidence store, configuration, and the audit hash ex
 | --- | --- | --- |
 | Mail server unavailable | Adapter retries with backoff | Automatic |
 | Folder adapter or mail adapter stopped | Drops or outtake items wait, and an alert is raised | Restart the adapter |
-| `ext-release` restarts during delivery | Outtake contents are lost, and the release moves to `failed` | Officer retries the release |
+| `ext-release` restarts during delivery | Undelivered outtake items are lost, and those releases move to `failed`. Results already written survive, so a delivered response is not sent twice | Officer retries the release |
 | `ext-sanitizer` unavailable | Jobs stay queued | Restore host, and jobs resume |
 | Flattening fails | Item rejected, with original kept in evidence | Ask the sender for another format |
 | DSS unavailable | Signed items stay queued | Restore DSS |
@@ -1239,6 +1263,7 @@ Keep hostile samples in a controlled store on the external network only.
 | T-25 | Shadow attack samples | Rejected or sent to review |
 | T-26 | Multiple signatures | Worst result used, and the latest signature's revision extracted |
 | T-27 | Signed PDF with embedded attachment | Attachment does not reach the internal network |
+| T-28 | Signed PDF whose signature is in the first revision of the file | Whole file flattened, state `passed` |
 | T-46 | Signed PDF while the passthrough is disabled | Only the flattened copy and report reach the internal network |
 
 ### 10.3 Package and transfer tests
@@ -1313,7 +1338,7 @@ Keep hostile samples in a controlled store on the external network only.
 | Phase | Build | Exit criteria |
 | --- | --- | --- |
 | 1. Import POC | Intake folder, `dxg-drop`, agent, screening, Dangerzone, basic console, DMZ transfer, `int-verifier` | T-01 to T-16, T-18, T-30 to T-36, T-45 and T-58 pass |
-| 2. Signed PDFs | DSS, strict policy, evidence store, reports, review flow | T-20 to T-27 and T-46 pass |
+| 2. Signed PDFs | DSS, strict policy, evidence store, reports, review flow | T-20 to T-28 and T-46 pass |
 | 3. Response path | Internal workflow, flattening, DLP rules, approvals, PDF signing upload, `int-validator`, package signing and encryption | T-37, T-38 and T-61 to T-63 pass |
 | 4. Release console | Queue, policy rules, second approval, `ext-release`, outtake folder | T-39 to T-44, T-60 and T-64 to T-69 pass |
 | 5. Hardening | Move from Docker to VMs, add the mail adapter, monitoring, backups, access review, procedures, separate hardware | T-17, T-47, T-50 to T-57 and T-59 pass |
@@ -1328,7 +1353,6 @@ Phases 1 to 5 also answer these questions, which the design review left for the 
 | 1 | What does the allowlist for incoming PDFs look like? | The check is written from real Dangerzone output, and T-58 passes |
 | 1 | How much memory does OpenSSL need to decrypt and verify the largest package? | `MAX_PACKAGE_BYTES` and the host sizes in appendix E.1 are confirmed or changed |
 | 1 | Do the Compose networks behave as appendix E.8 says on the Linux POC host? | The console ports are reachable from the host only, and no DMZ container reaches a console |
-| 1 | Do the package scripts work with the keys in a PKCS#11 device? | Sign, encrypt, decrypt and verify pass with SoftHSM |
 | 3 | Which DLP rules run on the extracted text, and is a tool such as Presidio worth adding? | The rules are written down and tested on sample responses |
 | 5 | Can a maintained mail fetcher and a standard mail relay replace a custom adapter? | One fetcher is chosen against the mailbox server's login method, and T-17 passes |
 
@@ -1342,7 +1366,9 @@ Phases 1 to 5 also answer these questions, which the design review left for the 
 | Recipient encryption | S/MIME for known recipients, or a secure download portal |
 | More adapters | Add any option from section 5.2, by the four steps at the end of that section. Each one only reads or writes a folder or a spool |
 | More formats | Enable 7z and RAR through libarchive with the ZIP rules, render CSV to PDF, and enable other Dangerzone formats |
-| Hardware key protection | PKCS#11 tokens or HSM for release and signing keys |
+| Hardware key protection | PKCS#11 tokens or HSM for the package keys. Test first that the package scripts work through PKCS#11 |
+| Several packages per request | Let one request cross in parts when its documents exceed `MAX_PACKAGE_BYTES` |
+| Bounce handling | Detect bounced mail in the mail adapter, and report it to the internal side as a status |
 | High availability | Replicated database and multiple workers after volume justifies it |
 
 For the hardware diode, keep the transfer layer behind a small interface so that a diode can replace SFTP without changing the package format:
@@ -1389,22 +1415,22 @@ High:
 
 Medium:
 
-5. Both SFTP accounts can write the same `drop/` folder (appendix E.5), so neither DMZ host enforces its direction.
-6. `open-payload.sh` decrypts into `/dev/shm`, which Docker limits to 64 MB by default, below `MAX_PACKAGE_BYTES`.
-7. Nothing defines what happens when a package would exceed `MAX_PACKAGE_BYTES`, although a ZIP can unpack to `ZIP_MAX_TOTAL_BYTES` and flattening makes files larger.
-8. ClamAV definitions reach `ext-sanitizer` daily (section 9.2), but the agent has no command for it (appendix D.1) and the snapshot restore removes them.
+5. Closed. On each DMZ host only the sender's account can write, and the receiver's account is read-only (appendix E.5).
+6. Closed. Hosts that decrypt packages get scratch space of at least twice `MAX_PACKAGE_BYTES`. The Compose file sets it for `int-verifier`.
+7. Closed. `ext-app` checks the size before it builds a package, and the operator sends fewer items (section 3.2). The limit is 200 MiB, to be confirmed in phase 1.
+8. Closed. The agent has an `update-definitions` command, and `ext-app` sends definitions after each restore (appendix D.1).
 9. Closed. The Compose file now names a database secret for `ext-app`, `ext-release` and `int-app`, and the key for the F16 call.
-10. Mail handling skips S/MIME, attached messages, `winmail.dat`, `.pptx`, `.rtf`, `.heic` and inline images, shows no SPF, DKIM or DMARC result, and does not say whether the suggested recipient is From or Reply-To.
-11. The `bounced` status has no source and no matching internal state.
+10. Closed. Section 7.5 defines the handling of signed and encrypted mail, attached messages, inline images, sender checks and the reply hint. Sections 7.1 and 7.2 cover the file types.
+11. Closed. The `bounced` status is removed. Bounce handling is in the backlog (section 11.2).
 12. Maintenance imports into the internal network (trust-list snapshots, Dangerzone templates, OS patches) have no design.
-13. `deploy/ext-core/setup-folders.sh` still creates the outtake folder and the `dxg-release` user on `ext-core`, gives `dxg-web` access to the outtake folder, and creates a local `dxg-mail` user. For the MVP, the outtake part must move to a script for the `ext-release` VM, without `dxg-web`, and the mail adapter needs a spool host script in place of the local user.
+13. `deploy/ext-core/setup-folders.sh` still creates the outtake folder and the `dxg-release` user on `ext-core`, gives `dxg-web` access to the outtake folder, and creates a local `dxg-mail` user. For the MVP, the outtake part must move to a script for the `ext-release` VM, without `dxg-web`, and the mail adapter needs a spool host script in place of the local user. The script also still creates `results/` inside the outtake folder, and delivery results now belong in `outtake-results/` on disk.
 14. The flow matrix (section 5.1) has no flows for log shipping, backups, time synchronisation, administrative access, name resolution for `ext-egress`, or operating system patches for the external hosts. SR-10 has a described control only for the DMZ hosts (appendix E.5). The "signed after approval" check and every certificate check need correct clocks. `ext-core` collects DMZ logs over SFTP, but nothing says how logs reach the `/srv/xfer` folder that the SFTP accounts are confined to.
-15. Delivery results are written inside the outtake folder, or beside a spool's `out/` folder, and the outtake folder is a tmpfs (section 5.2). If the host restarts after the adapter delivered a response and before `ext-release` recorded the result, the release moves to `failed`, and a retry sends the response twice. Keeping `results/` on disk would fix this, because a result holds no document content.
-16. Section 3.3 always extracts the signed revision of an incoming signed PDF. DSS returns no document when the signature is in the first revision of the file, and that case has no path.
+15. Closed. Delivery results are kept on disk, outside the tmpfs (section 5.2).
+16. Closed. The whole file is flattened when validation passed with full scope (section 3.3, T-28).
 17. `scripts/verify-envelope.sh` compares `payload_sha256` but not `payload_bytes` (section 8.4, step 6), and it fails on `ack` and `status` packages, which have no payload. `scripts/build-package.sh` also always adds a payload, so it builds only import and response packages.
-18. `ext-app` and `int-app` join only internal Docker networks, and Docker does not publish ports for such containers. The console ports in the Compose file will probably not be reachable. A small reverse proxy on a second network is one fix.
-19. The API tables in appendix D.3 have no route for marking a response sensitive, accepting a sequence gap, downloading a manual-channel file, or reading the audit log. `TEXT_FALLBACK_ENCODINGS` and `SECOND_APPROVAL_DOMAINS` have no value yet (appendix A). How a person collects a manual-channel file from the `ext-release` host is not described either.
-20. Imports assume a message body. The inner tar always holds `body.txt` (section 8.1), and the internal `requests.body_path` is `NOT NULL`. A drop of kind `file` has no body, and nothing says whether an empty one is generated. The external `requests.message_id` column is likewise only meaningful for mail.
+18. Closed. A reverse proxy per side publishes the console port, and the web applications join no published network (appendix E.8). To be confirmed on the Linux POC host.
+19. Closed. Appendix D.3 has the missing routes, both settings have a default (appendix A), and an officer downloads a manual-channel file through the console (appendix D.4).
+20. Closed. The message body is optional: `body.txt` is present only when the request has message text, and the console then shows "no message text". `message_id` stays as an optional column that only mail fills.
 
 ## Appendix A. Settings and default limits
 
@@ -1416,7 +1442,7 @@ These are starting values for the POC. The last column says where each setting i
 | `MAX_ITEM_BYTES` | 50 MiB | Section 7.2 |
 | `MAX_TEXT_BYTES` | 5 MiB | Section 7.3 |
 | `MAX_PDF_PAGES` | 500 | Appendix F.1 |
-| `MAX_PACKAGE_BYTES` | 500 MiB | Section 8.4 |
+| `MAX_PACKAGE_BYTES` | 200 MiB | Sections 3.2 and 8.4 |
 | `MAX_RESPONSE_PAGES` | 100 | Section 3.4 |
 | `MAX_RESPONSE_BYTES` | 25 MiB | Section 3.4 |
 | `SIGNATURE_MAX_APPEND_BYTES` | 2 MiB | Section 3.4 |
@@ -1428,12 +1454,12 @@ These are starting values for the POC. The last column says where each setting i
 | `ZIP_MAX_RATIO` | 100 | Section 7.4 |
 | `ZIP_MAX_DEPTH` | 2 | Section 7.4 |
 | `MAGIKA_MIN_SCORE` | 0.90 | Section 7.2 |
-| `TEXT_FALLBACK_ENCODINGS` | Not yet defined | Section 7.3 |
+| `TEXT_FALLBACK_ENCODINGS` | One encoding, set per deployment, for example `windows-1250` | Section 7.3 |
 | `OCR_LANG` | Set per deployment, for example `eng` or `ron` | Appendix D.1 |
 | `ALLOW_FAILED_AS_UNSIGNED` | `false` | Section 3.3 |
 | `ACK_TIMEOUT_MINUTES` | 30 | Section 3.2 |
 | `RELEASE_EXPIRY_DAYS` | 7 | Section 3.5 |
-| `SECOND_APPROVAL_DOMAINS` | Set by the service owner (section 12.1) | Section 3.5 |
+| `SECOND_APPROVAL_DOMAINS` | `*`, until the service owner narrows it (section 12.1) | Section 3.5 |
 | `SENSITIVE_ALLOW_EMAIL` | `false` | Section 3.5 |
 | `OUTTAKE_MAX_MINUTES` | 60 | Section 5.2 |
 | `EVIDENCE_RETENTION_DAYS` | Set by the records owner | Section 12.1 |
@@ -1499,6 +1525,9 @@ The requested operation arrives through `SSH_ORIGINAL_COMMAND`, and the agent ac
 | `normalize-text` | One text file | UTF-8 text, or a JSON error |
 | `convert` | One file | Flattened PDF, exit status `0` on success |
 | `extract-text` (`int-sanitizer` only) | One PDF | UTF-8 text |
+| `update-definitions` (`ext-sanitizer` only) | Tar of ClamAV definition files | JSON: the versions loaded, or an error |
+
+`ext-app` downloads ClamAV definitions through `ext-egress` (F10) and sends them with `update-definitions` after each daily restore of the VM, and once a day. The agent checks the signature that ClamAV puts on each definition file before it loads it. `screen` fails when the loaded definitions are older than 48 hours.
 
 Limits for every command are set in the systemd unit or wrapper: `RuntimeMaxSec`, `MemoryMax`, and a maximum stdin size.
 
@@ -1554,21 +1583,27 @@ Both consoles use the same conventions: session authentication, role checks on e
 | `POST /api/responses/{id}/release` | Release officer | Choose channel and recipient |
 | `POST /api/releases/{id}/approve` | Release approver | Second approval |
 | `POST /api/releases/{id}/refuse` | Release approver | Refuse with a reason |
+| `GET /api/releases/{id}/file` | Release officer | Download a released manual-channel file |
 | `POST /api/releases/{id}/manual-complete` | Release officer | Record how the file left the outtake folder |
+| `POST /api/channels/{direction}/accept-gap` | Operator | Accept a sequence gap, with a reason |
+| `GET /api/audit` | Auditor | Read the audit log |
 
 **Internal side**
 
 | Method and path | Role | Purpose |
 | --- | --- | --- |
-| `GET /api/requests` | User, auditor | List requests |
-| `GET /api/documents/{id}` | User, auditor | Open a sanitized document |
-| `POST /api/requests/{id}/responses` | User | Upload a draft response |
-| `POST /api/responses/{id}/submit` | User | Submit for approval |
+| `GET /api/requests` | Author, auditor | List requests |
+| `GET /api/documents/{id}` | Author, auditor | Open a sanitized document |
+| `POST /api/requests/{id}/responses` | Author | Upload a draft response |
+| `POST /api/responses/{id}/submit` | Author | Submit for approval |
 | `POST /api/responses/{id}/approve` | Approver | Approve the flattened PDF for signing |
 | `POST /api/responses/{id}/refuse` | Approver | Refuse with a reason |
 | `GET /api/responses/{id}/base` | Signer | Download the approved PDF |
 | `POST /api/responses/{id}/signed` | Signer | Upload the signed PDF, run the checks and send |
-| `POST /api/requests/{id}/close` | User | Close a request |
+| `POST /api/responses/{id}/sensitivity` | Author | Mark or unmark a response as sensitive, until it is approved |
+| `POST /api/requests/{id}/close` | Author | Close a request |
+| `POST /api/channels/{direction}/accept-gap` | Administrator | Accept a sequence gap, with a reason |
+| `GET /api/audit` | Auditor | Read the audit log |
 
 ### D.4 Release service
 
@@ -1587,7 +1622,9 @@ For each call, it:
 7. Writes the file and `delivery.json` to the channel's outtake folder. For a channel on a spool, it then uploads the item to the spool and deletes its local copy.
 8. Writes the audit event, and deletes its own plaintext copy.
 
-`ext-release` reads the adapter's result, in `outtake/results/` or on the spool, and records it in the database as soon as it appears, which completes the release.
+A manual-channel file stays in the outtake folder until the officer downloads it. `ext-app` then asks `ext-release` for the file over the same call (F16) and passes it to the officer's browser without storing it. This is the one case in which a decrypted response passes through `ext-core`, and sensitive responses use this channel.
+
+`ext-release` reads the adapter's result, in `outtake-results/` or on the spool, and records it in the database as soon as it appears, which completes the release.
 
 `ext-release` cannot check an approval itself. It accepts what `ext-app` recorded in the database (section 6.2).
 
@@ -1597,7 +1634,7 @@ For each call, it:
 
 | Command | What it does | Output |
 | --- | --- | --- |
-| `fetch` | Downloads the next package from `dmz-import`, runs steps 1 to 4 and 6 of section 8.4, keeps the package and deletes the remote copy | `envelope.json`, or a JSON rejection with the reason |
+| `fetch` | Downloads the next package from `dmz-import`, runs steps 1 to 4 and 6 of section 8.4, and keeps the package. It cannot delete or write on `dmz-import` | `envelope.json`, or a JSON rejection with the reason |
 | `open <package_id>` | Runs steps 8 to 11 of section 8.4 on a kept package | Tar of the inner files |
 | `discard <package_id>` | Deletes a kept package | Nothing |
 
@@ -1695,8 +1732,10 @@ These settings are for the MVP VMs:
 
 Transfer rules:
 
-- The sender uploads to `drop/.tmp-<package_id>` and renames it to `drop/<package_id>.tar`.
-- The receiver ignores `.tmp-*`, downloads, verifies the size, stores the file, and then deletes the remote copy.
+- On each DMZ host, only the sender's account can write to `packages/`. The receiver's account can read and nothing else, so each host carries packages one way only.
+- The sender uploads to `packages/.tmp-<package_id>` and renames it to `packages/<package_id>.tar`.
+- The receiver ignores `.tmp-*`, downloads, verifies the size and stores the file. It skips a file name it has already collected.
+- The sender deletes a package when its ack arrives, or when `ACK_TIMEOUT_MINUTES` has passed.
 - A cleanup job in `ext-app` alerts on any package older than `ACK_TIMEOUT_MINUTES`.
 - Administer DMZ hosts only from the hypervisor console, or through a separate management network that has no route to the external or internal networks.
 
@@ -1709,7 +1748,7 @@ Transfer rules:
 | Operator | External | Select items, review signature results, resend |
 | Release officer | External | Choose recipient and channel, complete a manual release |
 | Release approver | External | Give second approval |
-| User | Internal | Read documents, draft and submit responses |
+| Author | Internal | Read documents, draft and submit responses |
 | Approver | Internal | Approve or refuse a response |
 | Signer | Internal | Sign an approved response |
 | Auditor | Both | Read requests and audit logs |
@@ -1737,7 +1776,7 @@ Implementation rules for these permissions:
 
 ### E.8 POC deployment with Docker
 
-The POC runs 12 containers on one Docker host with Docker Compose. The two sanitizers run in separate VMs. The `dxg/*` images are built by this project. Section 4.2 explains which containers are grouped and which must stay separate.
+The POC runs 14 containers on one Docker host with Docker Compose. The two sanitizers run in separate VMs. The `dxg/*` images are built by this project. Section 4.2 explains which containers are grouped and which must stay separate.
 
 **Compose file:** [`poc/docker-compose.yml`](poc/docker-compose.yml). Its paths, such as `./folders` and `./secrets`, are relative to `poc/`, and `.gitignore` keeps both out of the repository.
 
@@ -1757,7 +1796,7 @@ The POC runs 12 containers on one Docker host with Docker Compose. The two sanit
 **POC rules:**
 
 - **Use test data only.** Dangerzone is isolated in a VM, but `ext-validator` and `int-app` still share one kernel on the Docker host. A DSS exploit from a hostile PDF could cross between the networks.
-- **Docker networks do not enforce direction.** Containers on the same Docker network can reach each other's listening ports, whatever `ports:` publishes. The DMZ containers share networks with `ext-app` and `int-app`, so one could connect to a console. In the POC, each web server must therefore listen only on its address on its own stack network, `ext-core` or `int-core`, and not on all interfaces. The Compose file does not express this yet. Confirm it in phase 1 by trying to connect from each DMZ container to both consoles. The MVP firewall enforces direction properly.
+- **Docker networks do not enforce direction.** Containers on the same Docker network can reach each other's listening ports, whatever `ports:` publishes. The DMZ containers share networks with `ext-app` and `int-app`, so one could connect to a console. In the POC, each web application therefore listens only on its stack network, where only its reverse proxy reaches it. The proxy is the only container with a published port, and its second network does not forward traffic out. Confirm this in phase 1 by trying to connect from each DMZ container to both consoles. The MVP firewall enforces direction properly.
 - **Run PDF checks as a restricted subprocess** in `ext-app`, `ext-release`, `int-app` and `int-verifier`, so that these containers need no access to the Docker socket. The MVP uses a separate restricted container.
 - **Restore the sanitizer VMs daily** from a clean snapshot.
 - **Use only the folders for files.** `dxg-drop` writes to `./folders/intake`, and released PDFs appear in `./folders/outtake/ready/`. The consoles handle decisions, not file transfer.
@@ -1798,6 +1837,8 @@ Script: [`checks/signature_append_check.py`](checks/signature_append_check.py).
 | `pdf_policy.py` | Executed against clean PDFs, real signed PDFs, and PDFs with JavaScript, links, attachments, launch actions and signature locks |
 | `signature_append_check.py` | Executed with visible, invisible, certified, second and timestamped signatures, and with altered, rewritten, unsigned, timestamp-only and oversized files |
 | nftables ruleset | Checked with `nft -c` |
+| DMZ directory script and SFTP settings for one-way folders | Rewritten, **not executed** |
+| Reverse proxies and their networks in the Compose file | Checked with `docker compose config`, **not started** |
 | Strict DSS policy command | Executed against `constraint.xml` from DSS 6.5.1 |
 | Dangerzone CLI options and exit codes | Read from the 0.11.1 source and documentation, **not executed** |
 | DSS REST paths, fields and signed-revision behavior | Read from DSS 6.5.1 source, **not executed**, because the build dependencies could not be downloaded in the test environment |

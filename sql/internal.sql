@@ -2,7 +2,7 @@ CREATE TABLE requests (
     id              uuid PRIMARY KEY,
     sender          text,
     subject         text,
-    body_path       text NOT NULL,
+    body_path       text,
     status          text NOT NULL CHECK (status IN ('open', 'closed')),
     received_at     timestamptz NOT NULL
 );

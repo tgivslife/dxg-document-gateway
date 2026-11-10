@@ -49,7 +49,7 @@ flowchart TB
         VAL["<b>Signature validators</b><br/>EU DSS, two instances.<br/>Internet only via a proxy"]
     end
 
-    subgraph NET["Internet"]
+    subgraph NET["Outside"]
         MAIL(["<b>Mail server</b><br/>Requests arrive here,<br/>responses leave here"])
         TRUST(["<b>Trust services</b><br/>EU trust lists, revocation<br/>checks and timestamps"])
     end
@@ -99,11 +99,11 @@ The core servers are the two application servers: ext-app on the external networ
 
 **Outgoing response, internal network to external network**
 
-1. A user on the internal network drafts a response to an open request. The draft is flattened, which removes metadata, comments and hidden content, then checked by data loss prevention (DLP) rules.
+1. An author on the internal network drafts a response to an open request. The draft is flattened, which removes metadata, comments and hidden content, then checked by data loss prevention (DLP) rules.
 2. A different user approves it.
 3. A signer signs the approved PDF with a qualified certificate and a timestamp. Both a personal qualified signature and the organisation's qualified seal are accepted. The system checks that only a signature was added.
 4. The response is packed, signed, encrypted and left on the export server. The external network collects it and keeps it encrypted.
-5. A release officer chooses the recipient and channel. Sensitive responses and unusual recipients need a second approver. A final signature check runs, and the file leaves byte for byte as signed.
+5. A release officer chooses the recipient and channel. A sensitive response always needs a second approver, and so does a recipient in a domain that the service owner lists. Any recipient other than the suggested one needs a written reason. A final signature check runs, and the file leaves byte for byte as signed.
 
 The internal network can never choose a recipient, and the external network can never change a response.
 
@@ -129,11 +129,11 @@ Each part does one job, and the parts that open untrusted files hold no keys and
 | Component | Network | What it does | Runs |
 | --- | --- | --- | --- |
 | ext-app | External | Console for operators and release officers, reachable only from the wired campus network. Runs intake, workflow and packaging. Holds the key that signs packages. | Laravel and Vue web app, OpenSSL |
-| ext-release | External, own server | Decrypts an approved response at release and hands it to the outgoing channel. Only holder of the release decryption key and of the outtake folder, so decrypted responses never sit on the ext-app server. | Small service, OpenSSL |
+| ext-release | External, own server | Decrypts an approved response at release and hands it to the outgoing channel. Only holder of the release decryption key and of the outtake folder. Decrypted responses stay off the ext-app server, except a response for manual delivery while an officer downloads it through the console. | Small service, OpenSSL |
 | ext-sanitizer | External, isolated VM | The only place untrusted files are opened: parses email, detects file types, scans, checks macros, unpacks ZIPs and flattens documents to PDF. No keys, no outbound network, reset daily. | Python agent, Magika, ClamAV, oletools, Dangerzone |
 | ext-validator | External, isolated | Validates signatures on incoming signed PDFs against the EU trusted lists. | EU DSS |
 | ext-response-validator | External, isolated | Checks the qualified signature or seal and the timestamp of each response at release. Never sees files from the internet. | EU DSS |
-| ext-egress | External | The validators' only way out. Allows trust lists, revocation checks, timestamps and antivirus updates, and denies everything else. | Squid proxy |
+| ext-egress | External | The only way out to the internet for the validators and for antivirus updates. Allows trust lists, revocation checks, timestamps and antivirus updates, and denies everything else. | Squid proxy |
 | ext-mail-adapter (MVP) | External, own server | Fetches mail and sends released responses. No keys and no database access. ext-app collects requests from it and ext-release delivers responses to it, so it never connects to them. | IMAP and SMTP client |
 | dmz-import, dmz-export | DMZ | One transfer server per direction. Holds only signed, encrypted packages until the other side collects them. | OpenSSH in file-transfer-only mode, nftables firewall |
 | int-verifier | Internal, isolated | The only internal part that connects to dmz-import. Collects packages, verifies and decrypts them, and checks every PDF before int-app sees it. Holds the import decryption key. No console, no database, and no key that signs response packages. | Small agent, OpenSSL, PDF checks |
@@ -164,12 +164,12 @@ The internal network receives flattened PDFs and normalized text, never an origi
 
 | Arrives as | Handling | Reaches the internal network as |
 | --- | --- | --- |
-| PDF, Word (.doc, .docx), Excel (.xls, .xlsx), OpenDocument (.odt, .ods), images (.jpg, .png, .tif) | Macro check for Office files, then flattened | Flattened PDF with OCR text |
+| PDF, Word (.doc, .docx), Excel (.xls, .xlsx), OpenDocument (.odt, .ods), images (.jpg, .png, .tif). Presentations (.pptx, .odp) and rich text (.rtf) if phase 1 confirms they flatten reliably | Macro check for Office files, then flattened | Flattened PDF with OCR text |
 | Text (.txt) | Encoding checked, control characters removed | Normalized UTF-8 text |
 | ZIP | Unpacked within size, count and depth limits, then each file handled as above | One item per file |
 | Signed PDF | Signature validated first, original kept as evidence | Flattened copy plus the validation report |
 
-Rejected automatically: executables, libraries, installers and scripts; macro-enabled Office files; HTML, SVG, XML, shortcuts and disk images; CSV; RAR, 7z and other archives; password-protected or damaged files; any file whose real type does not match its extension.
+Rejected automatically: executables, libraries, installers and scripts; macro-enabled Office files; HTML, SVG, XML, shortcuts and disk images; CSV; RAR, 7z and other archives; encrypted mail; password-protected or damaged files; any file whose real type does not match its extension.
 
 The cost is fidelity. Flattened PDFs keep a document's look but lose formulas, links and editable text. A signature does not survive flattening, so the internal network relies on the validation report instead.
 
@@ -183,7 +183,7 @@ Five risks remain by design. A design review also found a number of open issues.
 | A software boundary, not a hardware data diode | Not proposed for classified networks without review. A hardware diode can replace the DMZ transfer later without changing the package format. |
 | The internal network trusts signature checks made on the external side | The validation report is signed into the package, and the original stays in the evidence store. |
 | Data hidden in page images on the way out | DLP reads text only. Flattening, size limits, a second approver and no recipient control on the internal network reduce the channel. |
-| A compromised external core server | It can read every collected request and queued import. It can also record false approvals, and so release a waiting response to a recipient of its choice. It cannot change a response, and it cannot read the release key or a decrypted response, which sit on a separate server. The console is reachable only from the wired campus network, the internal network verifies every package, and the signing key can be revoked. |
+| A compromised external core server | It can read every collected request and queued import. It can also record false approvals, and so release a waiting response to a recipient of its choice. It cannot change a response, and it cannot read the release key, which sits on a separate server. It can read a response only while an officer downloads it for manual delivery, which is how sensitive responses leave. The console is reachable only from the wired campus network, the internal network verifies every package, and the signing key can be revoked. |
 
 | Known gap | Proposed fix |
 | --- | --- |

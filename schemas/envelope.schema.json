@@ -18,7 +18,7 @@
     "ack_package_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
     "ack_result": { "enum": ["accepted", "rejected"] },
     "ack_reason": { "enum": ["signature", "schema", "sequence", "hash", "pdf_policy", "request_state", "feature_disabled"] },
-    "status": { "enum": ["released", "expired", "bounced"] }
+    "status": { "enum": ["released", "expired"] }
   },
   "allOf": [
     {
