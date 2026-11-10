@@ -6,6 +6,8 @@ Teodor Ion · 4 November 2026
 
 We ask the security team for seven decisions, listed at the end of this proposal. The last one is approval to start a proof of concept on one isolated host, with test data only.
 
+The internal network is classified, so the security authority decides the architecture before implementation starts. The first decision below is the one that settles it: whether a firewall-and-DMZ boundary is acceptable, or a hardware data diode is required.
+
 ## The need
 
 Requests arrive by email at a mailbox on the internet-connected network, called the external network here. They carry Word, Excel, PDF, text, image and ZIP attachments, and some PDFs are digitally signed. Staff on the internal network (the intranet) need some of these documents, and they answer each request with a signed response. They write and sign that response in an existing internal application, through the organisation's PKI service.
@@ -184,7 +186,7 @@ Six risks remain by design. A design review also found a number of open issues, 
 | Remaining risk | What limits it |
 | --- | --- |
 | An exploit in Dangerzone that escapes both the sandbox and the VM | The VM holds no keys and has no outbound network, it is reset daily, and the internal network checks every PDF again. |
-| A software boundary, not a hardware data diode | Not proposed for classified networks without review. A hardware diode can replace the DMZ transfer later without changing the package format. |
+| A software boundary, not a hardware data diode | The internal network is classified, so the security authority decides whether this is acceptable. A hardware diode can replace the DMZ transfer without changing the package format. |
 | The internal network trusts signature checks made on the external side | The validation report is signed into the package, and the original stays in the evidence store. |
 | Data hidden in a response on the way out | DXG does not rebuild responses as images, as it does incoming files. The PKI service removes forms, actions and scripts before the seal, DLP reads the text, and size limits, the signatures and no recipient control on the internal network reduce the channel. |
 | One PKI service is reachable from both networks, and it reaches a cloud signature provider | DXG sends it only finished responses, never a file from the internet. Incoming files are validated on a separate instance. The service itself is outside DXG's control. The security team has accepted this. |
@@ -215,7 +217,7 @@ We ask for seven decisions, the last being approval to start the proof of concep
 
 | Decision | Our proposal |
 | --- | --- |
-| Is a firewall-and-DMZ boundary acceptable for this internal network, or is a hardware data diode required? | Software boundary for the proof of concept and MVP, with the diode as the upgrade path if the internal network's classification requires it. |
+| The internal network is classified. Is a firewall-and-DMZ boundary acceptable for it, or is a hardware data diode required? | This decision comes first, and implementation waits for it. We propose the software boundary for the proof of concept and MVP. If a diode is required, it replaces the DMZ transfer, and the rest of the design stays. |
 | Which signature trust anchors do we accept? | The EU trusted lists only. Other national or private CAs only through a reviewed change. |
 | What counts as a sensitive response, and which recipients need a second approver? | Defined with the service owner before phase 4. |
 | How long do we keep original emails, which hold personal data, plus audit logs and responses? | Set with the records and data protection owners before phase 2. |
