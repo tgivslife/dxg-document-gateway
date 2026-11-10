@@ -8,14 +8,14 @@ We ask the security team for eight decisions, listed at the end of this proposal
 
 ## The need
 
-Requests arrive by email at a mailbox on the internet-connected network, called the external network here. They carry Word, Excel, PDF, text, image and ZIP attachments, and some PDFs are digitally signed. Staff on the internal network (the intranet) need some of these documents, and they answer each request with a signed response.
+Requests arrive by email at a mailbox on the internet-connected network, called the external network here. They carry Word, Excel, PDF, text, image and ZIP attachments, and some PDFs are digitally signed. Staff on the internal network (the intranet) need some of these documents, and they answer each request with a signed response. They write and sign that response in an existing internal application, through the organisation's PKI service.
 
 The solution must:
 
 - Bring only the selected documents into the internal network, never an executable, script, macro or other active content.
-- Keep the internal network off the internet: nothing connects into it, and it never connects out.
-- Send each response as a PDF with a qualified electronic signature or seal and a trusted timestamp, unchanged after approval.
-- Let the internal network approve what a response says, and let the external network choose who receives it.
+- Keep the internal network off the internet: nothing connects into it, and it never connects out. The one exception is the organisation's PKI service, which both networks use.
+- Send each response as a PDF that carries the organisation's qualified seal, at least one qualified user signature and a qualified timestamp, unchanged after signing.
+- Let the internal network decide what a response says, and let the external network choose who receives it.
 - Record every decision against the request, from the original email to the delivered response.
 - Accept other ways in and out later, such as an upload portal, without rebuilding the pipeline. Email is the first.
 
@@ -30,10 +30,13 @@ flowchart TB
     accDescr: DXG parts by network zone. Arrows point from the side that opens the connection, and both networks connect out to the DMZ.
 
     subgraph INT["Internal network"]
-        IAPP["<b>int-app</b><br/>Documents, drafting,<br/>approval and signing.<br/>Holds the key that signs<br/>response packages."]
+        COMPOSE(["<b>Composing application</b><br/>Existing application, outside DXG.<br/>Users write and sign responses"])
+        IAPP["<b>int-app</b><br/>Incoming documents, and<br/>checks on finished responses.<br/>Holds the key that signs<br/>response packages."]
         IVER["<b>int-verifier</b><br/>Collects, decrypts and<br/>checks incoming packages.<br/>No console, no database."]
-        ISAN[["<b>int-sanitizer VM</b><br/>Flattens response drafts,<br/>extracts text for DLP"]]
-        IVAL["<b>int-validator</b><br/>Checks signed responses<br/>offline, no network"]
+    end
+
+    subgraph SHARED["Used by both networks"]
+        PKI(["<b>PKI service</b><br/>The organisation's signing and<br/>validation service, outside DXG"])
     end
 
     subgraph DMZ["DMZ"]
@@ -46,7 +49,7 @@ flowchart TB
         REL["<b>ext-release</b><br/>Decrypts a response at release.<br/>Own server, holds the release key."]
         ADAPTER["<b>Mail adapter (MVP)</b><br/>Fetches and sends mail.<br/>Own server, cannot connect<br/>to ext-app or ext-release."]
         SAN[["<b>ext-sanitizer VM</b><br/>Opens untrusted files,<br/>flattens them to PDF.<br/>No keys, no network."]]
-        VAL["<b>Signature validators</b><br/>EU DSS, two instances.<br/>Internet only via a proxy"]
+        VAL["<b>ext-validator</b><br/>Validates signatures on<br/>incoming PDFs. Internet<br/>only via a proxy"]
     end
 
     subgraph NET["Outside"]
@@ -58,8 +61,9 @@ flowchart TB
     IVER --> IMP
     IAPP --> IVER
     IAPP --> EXP
-    IAPP --> ISAN
-    IAPP --> IVAL
+    COMPOSE -. "response folder" .- IAPP
+    COMPOSE --> PKI
+    IAPP --> PKI
     CORE --> IMP
     CORE --> EXP
     CORE --> SAN
@@ -67,7 +71,7 @@ flowchart TB
     CORE -->|"collects requests"| ADAPTER
     REL -->|"delivers responses"| ADAPTER
     CORE --> REL
-    REL --> VAL
+    REL --> PKI
     ADAPTER --> MAIL
     VAL --> TRUST
 
@@ -77,10 +81,11 @@ flowchart TB
     classDef part fill:#eef0fb,stroke:#7b7fc4,color:#1f1f1f
     classDef vm fill:#fbe3d9,stroke:#c8642e,stroke-width:2px,color:#1f1f1f
     classDef dmz fill:#dbe8f7,stroke:#3b6fc4,stroke-width:2px,color:#1f1f1f
-    class MAIL,TRUST,ADAPTER,CORE,REL,VAL,IAPP,IVAL,IVER part
-    class SAN,ISAN vm
+    class MAIL,TRUST,ADAPTER,CORE,REL,VAL,IAPP,IVER,PKI,COMPOSE part
+    class SAN vm
     class IMP,EXP dmz
     style NET fill:#f3f3f3,stroke:#9a9a9a
+    style SHARED fill:#f3f3f3,stroke:#9a9a9a
     style EXT fill:#eaf2fb,stroke:#8fb4e0
     style DMZ fill:#fff4dd,stroke:#d8b85a
     style INT fill:#ebf5ec,stroke:#7fbf8a
@@ -99,11 +104,11 @@ The core servers are the two application servers: ext-app on the external networ
 
 **Outgoing response, internal network to external network**
 
-1. An author on the internal network drafts a response to an open request. The draft is flattened, which removes metadata, comments and hidden content, then checked by data loss prevention (DLP) rules.
-2. A different user approves it.
-3. A signer signs the approved PDF with a qualified certificate and a timestamp. Both a personal qualified signature and the organisation's qualified seal are accepted. The system checks that only a signature was added.
+1. Users write the response in the existing composing application. The PKI service applies the organisation's qualified seal and a timestamp, and then one or more users sign. In the organisation's process, a signature is the approval.
+2. The composing application hands the finished PDF to DXG for an open request.
+3. DXG asks the PKI service to check the seal, the signatures and the timestamps, checks that the PDF has no active content, and runs data loss prevention (DLP) rules on its text.
 4. The response is packed, signed, encrypted and left on the export server. The external network collects it and keeps it encrypted.
-5. A release officer chooses the recipient and channel. A sensitive response always needs a second approver, and so does a recipient in a domain that the service owner lists. Any recipient other than the suggested one needs a written reason. A final signature check runs, and the file leaves byte for byte as signed.
+5. A release officer chooses the recipient and channel. A sensitive response always needs a second approver, and so does a recipient in a domain that the service owner lists. Any recipient other than the suggested one needs a written reason. The PKI service checks the signatures once more, and the file leaves byte for byte as signed.
 
 The internal network can never choose a recipient, and the external network can never change a response.
 
@@ -114,10 +119,10 @@ Six rules carry the design, and each is enforced by a control rather than by tru
 | # | Rule | How it is enforced |
 | --- | --- | --- |
 | 1 | Nothing from the internet reaches the internal network unchanged | Every document is rebuilt as a flattened PDF. Only flattened PDFs, normalized text and signed validation reports cross. |
-| 2 | Nothing connects into the internal network | Both networks connect out to the DMZ servers. The DMZ servers accept file transfers only from the two core servers and the internal verifier, and cannot open connections themselves. |
+| 2 | Nothing connects into the internal network | Both networks connect out to the DMZ servers. The DMZ servers accept file transfers only from the two core servers and the internal verifier, and cannot open connections themselves. The one exception is the PKI service, which both networks reach. |
 | 3 | Untrusted files are opened only in disposable isolation | A dedicated virtual machine with no keys and no network opens them, and each document is flattened inside a further sandbox. The machine is reset from a clean snapshot daily. |
 | 4 | Packages cannot be read or forged in transit | The sender signs each package and encrypts it for the receiver, with pinned certificates, sequence numbers and replay detection. Each direction has its own DMZ server, account and keys. |
-| 5 | People decide, the system enforces | An operator selects what enters. A response needs an author, a different approver and a signer. The internal network cannot set a recipient, and the release officer cannot edit the file. |
+| 5 | People decide, the system enforces | An operator selects what enters. A response needs the organisation's seal and at least one user signature, which is the approval. The internal network cannot set a recipient, and the release officer cannot edit the file. |
 | 6 | Every step is traceable | Both sides keep a hash-chained audit log linked to the request ID. Original emails stay in an evidence store on the external network. |
 
 Antivirus and type checks only reject known-bad files early. Flattening is the main protection, and a clean scan never skips it.
@@ -131,15 +136,14 @@ Each part does one job, and the parts that open untrusted files hold no keys and
 | ext-app | External | Console for operators and release officers, reachable only from the wired campus network. Runs intake, workflow and packaging. Holds the key that signs packages. | Laravel and Vue web app, OpenSSL |
 | ext-release | External, own server | Decrypts an approved response at release and hands it to the outgoing channel. Only holder of the release decryption key and of the outtake folder. Decrypted responses stay off the ext-app server, except a response for manual delivery while an officer downloads it through the console. | Small service, OpenSSL |
 | ext-sanitizer | External, isolated VM | The only place untrusted files are opened: parses email, detects file types, scans, checks macros, unpacks ZIPs and flattens documents to PDF. No keys, no outbound network, reset daily. | Python agent, Magika, ClamAV, oletools, Dangerzone |
-| ext-validator | External, isolated | Validates signatures on incoming signed PDFs against the EU trusted lists. | EU DSS |
-| ext-response-validator | External, isolated | Checks the qualified signature or seal and the timestamp of each response at release. Never sees files from the internet. | EU DSS |
-| ext-egress | External | The only way out to the internet for the validators and for antivirus updates. Allows trust lists, revocation checks, timestamps and antivirus updates, and denies everything else. | Squid proxy |
+| ext-validator | External, isolated | Validates signatures on incoming signed PDFs against the EU trusted lists. A separate instance of the PKI service software, with signing switched off, so that no file from the internet reaches the shared service. | eSign-API |
+| ext-egress | External | The only way out to the internet for ext-validator and for antivirus updates. Allows trust lists, revocation checks, timestamps and antivirus updates, and denies everything else. | Squid proxy |
 | ext-mail-adapter (MVP) | External, own server | Fetches mail and sends released responses. No keys and no database access. ext-app collects requests from it and ext-release delivers responses to it, so it never connects to them. | IMAP and SMTP client |
 | dmz-import, dmz-export | DMZ | One transfer server per direction. Holds only signed, encrypted packages until the other side collects them. | OpenSSH in file-transfer-only mode, nftables firewall |
 | int-verifier | Internal, isolated | The only internal part that connects to dmz-import. Collects packages, verifies and decrypts them, and checks every PDF before int-app sees it. Holds the import decryption key. No console, no database, and no key that signs response packages. | Small agent, OpenSSL, PDF checks |
-| int-app | Internal | Console for internal users. Stores verified documents, runs drafting, approval, signing upload and DLP checks, and builds response packages. Holds the key that signs response packages. | Laravel and Vue web app, OpenSSL |
-| int-sanitizer | Internal, isolated VM | Flattens response drafts and extracts their text for DLP checks. | Python agent, Dangerzone |
-| int-validator | Internal, isolated | Checks signed responses early, offline, with a reviewed copy of the trust lists. | EU DSS |
+| int-app | Internal | Console for internal readers. Stores verified documents, collects finished responses from the composing application, checks them and builds response packages. Holds the key that signs response packages. | Laravel and Vue web app, OpenSSL |
+| PKI service | Used by both networks, outside DXG | The organisation's existing signing and validation service. Seals and signs responses for the composing application, and validates them for int-app and ext-release. | eSign-API |
+| Composing application | Internal, outside DXG | The existing application in which users write and sign a response. Hands the finished PDF to DXG. | Existing |
 | Databases | Each side | Requests, decisions, job queue and the audit log. One per network, never shared. | PostgreSQL |
 
 The software, in one line each:
@@ -150,13 +154,13 @@ The software, in one line each:
 | Magika | Google's file-type detector. It reads the content, so a renamed executable is caught. |
 | ClamAV | Open-source antivirus for known malware. |
 | oletools | Finds macros in Office files. |
-| EU DSS | The European Commission's Digital Signature Service. Validates PDF signatures against the EU trusted lists and writes a standard validation report. |
+| eSign-API | The organisation's signing and validation service, built on the European Commission's Digital Signature Service. Validates PDF signatures against the EU trusted lists and writes a validation report. |
 | Squid | A web proxy, used here as an allowlist. |
 | OpenSSH, nftables | A file-transfer-only server and the Linux host firewall. |
 | OpenSSL | Signs and encrypts packages in the CMS standard format. |
 | Laravel, Vue, PostgreSQL | The web application framework, its user interface and its database. |
 
-The proof of concept runs everything on one host in containers, with the two sanitizers in VMs, on test data only. The MVP moves each component to its own VM, and runs the internal network and DMZ parts on hardware separate from the external ones.
+The proof of concept runs everything on one host in containers, with the sanitizer in a VM, on test data only. The MVP moves each component to its own VM, and runs the internal network and DMZ parts on hardware separate from the external ones.
 
 ## Files
 
@@ -175,22 +179,20 @@ The cost is fidelity. Flattened PDFs keep a document's look but lose formulas, l
 
 ## Remaining risks and known gaps
 
-Five risks remain by design. A design review also found a number of open issues. The four most serious are listed here. One is settled, and the other three must be closed before or during the proof of concept. The [technical design](document-exchange-mvp-technical-documentation.md) lists all of them in section 12.2.
+Six risks remain by design. A design review also found a number of open issues, and one serious gap is listed here. The [technical design](document-exchange-mvp-technical-documentation.md) lists all open issues in section 12.2.
 
 | Remaining risk | What limits it |
 | --- | --- |
 | An exploit in Dangerzone that escapes both the sandbox and the VM | The VM holds no keys and has no network, it is reset daily, and the internal network checks every PDF again. |
 | A software boundary, not a hardware data diode | Not proposed for classified networks without review. A hardware diode can replace the DMZ transfer later without changing the package format. |
 | The internal network trusts signature checks made on the external side | The validation report is signed into the package, and the original stays in the evidence store. |
-| Data hidden in page images on the way out | DLP reads text only. Flattening, size limits, a second approver and no recipient control on the internal network reduce the channel. |
+| Data hidden in a response on the way out | Responses are no longer rebuilt as images. The PKI service removes forms, actions and scripts before the seal, DLP reads the text, and size limits, the signatures and no recipient control on the internal network reduce the channel. |
+| One PKI service is reachable from both networks, and it reaches a cloud signature provider | DXG sends it only finished responses, never a file from the internet. Incoming files are validated on a separate instance. The service itself is outside DXG's control. |
 | A compromised external core server | It can read every collected request and queued import. It can also record false approvals, and so release a waiting response to a recipient of its choice. It cannot change a response, and it cannot read the release key, which sits on a separate server. It can read a response only while an officer downloads it for manual delivery, which is how sensitive responses leave. The console is reachable only from the wired campus network, the internal network verifies every package, and the signing key can be revoked. |
 
 | Known gap | Proposed fix |
 | --- | --- |
-| The check that only a signature was added compares page drawing commands. A flattened page draws an image stored elsewhere, so that image could be swapped during signing. | Compare the rendered pages, or allow the signing step to add signature objects only. |
 | The internal network checks incoming PDFs against a list of forbidden features. A hostile font or image could pass if the external side were compromised. | The verifier will accept only the exact structure Dangerzone produces. This check is written in phase 1, from real Dangerzone output. |
-| Signers on the internal network need a trusted timestamp, but the internal network has no route out. | A security decision, listed below. |
-| Where the MVP mail adapter runs was not settled, and it reaches the internet. | Settled. It runs on its own server, which cannot connect to ext-app or ext-release. ext-app collects from it and ext-release delivers to it. |
 
 ## Plan
 
@@ -200,7 +202,7 @@ The work runs in six phases, and only test data is used until the MVP passes an 
 | --- | --- | --- |
 | 1. Import proof of concept | Intake, screening, flattening, DMZ transfer, internal verifier | Malware, disguised-file, ZIP-bomb and tampered-package tests pass |
 | 2. Signed PDFs | Signature validation, evidence store, reports, operator review | Valid, revoked, altered and shadow-attack samples are handled correctly |
-| 3. Response path | Drafting, flattening, DLP, approval, signing upload, response packages | Only correctly signed, unaltered responses are accepted |
+| 3. Response path | Hand-over from the composing application, signature checks through the PKI service, DLP, response packages | Only correctly sealed and signed, unaltered responses are accepted |
 | 4. Release console | Release queue, recipient rules, second approval, outtake | No response can be released without its required approvals |
 | 5. Hardening | Separate VMs and hardware, mail adapter, monitoring, backups, procedures | Network isolation, restore and load tests pass |
 | 6. MVP sign-off | Independent penetration test and fixes | No open critical or high findings |
@@ -214,7 +216,7 @@ We ask for eight decisions, the last being approval to start the proof of concep
 | Decision | Our proposal |
 | --- | --- |
 | Is a firewall-and-DMZ boundary acceptable for this internal network, or is a hardware data diode required? | Software boundary for the proof of concept and MVP, with the diode as the upgrade path if the internal network's classification requires it. |
-| How do internal signers get a trusted timestamp without the internal network connecting out? | Use an existing internal timestamp service if one qualifies. Otherwise, a dedicated timestamp proxy in the DMZ that carries only hashes, as a reviewed exception. |
+| Do you accept that one PKI service is reachable from both networks? It also reaches a cloud signature provider. | Accept. The organisation already runs it this way. DXG sends it only finished responses and never a file from the internet, and validates incoming files on a separate instance. |
 | Which signature trust anchors do we accept? | The EU trusted lists only. Other national or private CAs only through a reviewed change. |
 | What counts as a sensitive response, and which recipients need a second approver? | Defined with the service owner before phase 4. |
 | How long do we keep original emails, which hold personal data, plus audit logs and responses? | Set with the records and data protection owners before phase 2. |

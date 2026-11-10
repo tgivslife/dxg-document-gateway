@@ -22,15 +22,15 @@ services:
     volumes:
       - ./folders/intake:/srv/dxg/intake
       - ext-evidence:/srv/dxg/evidence
-    secrets: [ext_package_sign, ext_db_password, ext_dss_client, sftp_ext_import, sftp_ext_export, agent_ext, release_ext]
+    secrets: [ext_package_sign, ext_db_password, ext_validator_key, sftp_ext_import, sftp_ext_export, agent_ext, release_ext]
 
   ext-release:
     <<: *app
     image: dxg/ext-release:poc
-    networks: [ext-release-call, ext-release-db, ext-check]
+    networks: [ext-release-call, ext-release-db, ext-pki]
     volumes:
       - ./folders/outtake:/srv/dxg/outtake
-    secrets: [ext_release_enc, ext_release_db_password, ext_release_dss_client]
+    secrets: [ext_release_enc, ext_release_db_password, ext_release_pki_key]
 
   ext-postgres:
     image: postgres:16
@@ -43,18 +43,13 @@ services:
 
   ext-validator:
     <<: *app
-    image: dxg/dss:poc
+    image: dxg/esign-api:poc
     networks: [ext-validate, ext-trust-incoming]
-
-  ext-response-validator:
-    <<: *app
-    image: dxg/dss:poc
-    networks: [ext-check, ext-trust-responses]
 
   ext-egress:
     image: dxg/squid:poc
     restart: unless-stopped
-    networks: [ext-updates, ext-trust-incoming, ext-trust-responses, outside]
+    networks: [ext-updates, ext-trust-incoming, outside]
 
   dmz-import:
     image: dxg/sftp:poc
@@ -78,9 +73,11 @@ services:
   int-app:
     <<: *app
     image: dxg/int-app:poc
-    networks: [int-core, int-sanitize, int-validate, int-verify, int-to-export]
-    volumes: [int-documents:/srv/dxg/documents]
-    secrets: [int_package_sign, int_db_password, int_dss_client, sftp_int_export, agent_int, verifier_int]
+    networks: [int-core, int-pki, int-verify, int-to-export]
+    volumes:
+      - int-documents:/srv/dxg/documents
+      - ./folders/responses:/srv/dxg/responses
+    secrets: [int_package_sign, int_db_password, int_pki_key, sftp_int_export, verifier_int]
 
   int-verifier:
     <<: *app
@@ -98,10 +95,12 @@ services:
     volumes: [int-db:/var/lib/postgresql/data]
     secrets: [int_db_password]
 
-  int-validator:
+  # Stand-in for the organisation's shared PKI service. Like the real one, it is
+  # reachable from both sides.
+  pki-service:
     <<: *app
-    image: dxg/dss:poc
-    networks: [int-validate]
+    image: dxg/esign-api:poc
+    networks: [ext-pki, int-pki]
 
 networks:
   outside: {}
@@ -115,18 +114,17 @@ networks:
       com.docker.network.bridge.enable_ip_masquerade: "false"
   ext-core: { internal: true }
   ext-validate: { internal: true }
-  ext-check: { internal: true }
+  ext-pki: { internal: true }
+  int-pki: { internal: true }
   ext-release-call: { internal: true }
   ext-release-db: { internal: true }
   ext-updates: { internal: true }
   ext-trust-incoming: { internal: true }
-  ext-trust-responses: { internal: true }
   ext-to-import: { internal: true }
   ext-to-export: { internal: true }
   int-to-import: { internal: true }
   int-to-export: { internal: true }
   int-core: { internal: true }
-  int-validate: { internal: true }
   int-verify: { internal: true }
   ext-sanitize:
     internal: true
@@ -134,12 +132,6 @@ networks:
       com.docker.network.bridge.name: br-ext-san
     ipam:
       config: [{ subnet: 172.30.10.0/24 }]
-  int-sanitize:
-    internal: true
-    driver_opts:
-      com.docker.network.bridge.name: br-int-san
-    ipam:
-      config: [{ subnet: 172.30.20.0/24 }]
 
 volumes:
   ext-evidence: {}
@@ -154,9 +146,9 @@ secrets:
   ext_release_enc: { file: ./secrets/ext-release-enc.pem }
   ext_db_password: { file: ./secrets/ext-db-password }
   ext_release_db_password: { file: ./secrets/ext-release-db-password }
-  ext_dss_client: { file: ./secrets/ext-dss-client.pem }
+  ext_validator_key: { file: ./secrets/ext-validator-key }
   ext_console_tls: { file: ./secrets/ext-console-tls.pem }
-  ext_release_dss_client: { file: ./secrets/ext-release-dss-client.pem }
+  ext_release_pki_key: { file: ./secrets/ext-release-pki-key }
   sftp_ext_import: { file: ./secrets/sftp-ext-import }
   sftp_ext_export: { file: ./secrets/sftp-ext-export }
   release_ext: { file: ./secrets/release-ext }
@@ -164,9 +156,8 @@ secrets:
   int_package_sign: { file: ./secrets/int-package-sign.pem }
   int_import_enc: { file: ./secrets/int-import-enc.pem }
   int_db_password: { file: ./secrets/int-db-password }
-  int_dss_client: { file: ./secrets/int-dss-client.pem }
+  int_pki_key: { file: ./secrets/int-pki-key }
   int_console_tls: { file: ./secrets/int-console-tls.pem }
   sftp_int_export: { file: ./secrets/sftp-int-export }
-  agent_int: { file: ./secrets/agent-int }
   sftp_int_import: { file: ./secrets/sftp-int-import }
   verifier_int: { file: ./secrets/verifier-int }

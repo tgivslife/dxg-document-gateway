@@ -28,26 +28,24 @@ CREATE TABLE responses (
     version         integer NOT NULL,
     kind            text NOT NULL DEFAULT 'signed' CHECK (kind IN ('signed', 'countersigned')),
     source_document_id uuid REFERENCES documents(id),
-    author          text NOT NULL,
-    approver        text,
+    source_application text NOT NULL,
+    source_reference text NOT NULL,
     sensitivity     text NOT NULL DEFAULT 'normal' CHECK (sensitivity IN ('normal', 'sensitive')),
-    base_path       text,
-    base_sha256     char(64),
-    base_bytes      bigint,
-    signed_path     text,
-    signed_sha256   char(64),
-    signed_by       text,
-    signer_account  text,
+    signed_path     text NOT NULL,
+    signed_sha256   char(64) NOT NULL,
+    signed_bytes    bigint NOT NULL,
+    signatures      jsonb,
     signature_result text,
     dlp_result      jsonb,
+    reject_reason   text CHECK (reject_reason IN (
+                        'schema', 'request_state', 'size', 'signature',
+                        'pdf_policy', 'dlp', 'rejected_by_ext')),
     status          text NOT NULL CHECK (status IN (
-                        'draft', 'flattening', 'blocked', 'awaiting_approval',
-                        'refused', 'approved', 'awaiting_signature',
-                        'signature_rejected', 'sent', 'rejected_by_ext',
+                        'received', 'checking', 'rejected', 'sent',
                         'released', 'expired')),
-    approved_at     timestamptz,
+    received_at     timestamptz NOT NULL DEFAULT now(),
     UNIQUE (request_id, version),
-    CHECK (approver IS NULL OR approver <> author)
+    UNIQUE (source_application, source_reference)
 );
 
 CREATE TABLE packages (

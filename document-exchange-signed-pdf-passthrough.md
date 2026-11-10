@@ -10,6 +10,8 @@
 
 This document belongs to the [technical design](document-exchange-mvp-technical-documentation.md) and uses its terms, settings, requirement IDs and test IDs. Section and appendix numbers that name the technical design refer to that document. All other section numbers refer to this one.
 
+**This document must be revised before activation.** It was written when DXG itself ran the approval and signing of responses, with its own signing tool, `int-sanitizer` and `int-validator`. Responses are now composed and signed in the composing application through the PKI service (section 3.4 of the [technical design](document-exchange-mvp-technical-documentation.md)), and those components no longer exist. The eligibility rules, risks and tests below still apply. The handling, return checks and components in sections 5 to 7 must be redesigned around the composing application.
+
 **This feature is disabled by default.** The POC and MVP do not depend on it. Section 3.6 of the [technical design](document-exchange-mvp-technical-documentation.md) lists the few items the MVP must reserve, so that activating the feature later needs no change to the package format.
 
 ## 1. Purpose

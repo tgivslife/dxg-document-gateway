@@ -25,7 +25,7 @@ DXG moves documents from mail requests received on the internet-connected extern
 The design has six rules. The [proposal](document-exchange-proposal.md) lists the same six, with the same numbers.
 
 1. **Nothing from the internet reaches the internal network unchanged.** Documents are flattened to PDF. Only signed manifests, reports and normalized text accompany them.
-2. **Nothing connects into the internal network.** The internal network never connects to the internet or directly to the external network. The two networks exchange signed, encrypted packages through a DMZ, and the internal network opens all connections on its side.
+2. **Nothing connects into the internal network.** The internal network never connects to the internet or directly to the external network. The one accepted exception is the shared PKI service (section 3.4). The two networks exchange signed, encrypted packages through a DMZ, and the internal network opens all connections on its side.
 3. **Untrusted files are opened only in disposable isolation.** A VM with no keys and no outbound network opens them. It is restored from a clean snapshot daily.
 4. **Packages cannot be read or forged in transit.** The sender signs each package and encrypts it for the receiver. Each direction has its own DMZ host, account and keys.
 5. **People decide, the system enforces.** An operator selects what enters. The internal side approves the content of a response, and a user on the external side chooses the recipient and channel.
@@ -41,10 +41,10 @@ Section 2.2 turns these rules into security requirements. Section 3.6 defines on
 | File allowlist, type detection, ClamAV screening | Commercial CDR |
 | Sanitization to flattened PDF with Dangerzone | Editable Office output on the internal network |
 | TXT normalization and safe ZIP unpacking | RAR, 7z and other archive formats |
-| PAdES validation with EU DSS | Validation of `.p7m`, `.p7s` and ASiC files |
+| PAdES validation of incoming PDFs with the organisation's eSign-API, which builds on EU DSS | Validation of `.p7m`, `.p7s` and ASiC files |
 | Evidence store for originals on the external network | Long-term archival preservation |
 | Signed and encrypted packages in both directions | Hardware diode (kept as an upgrade path, section 11.2) |
-| Digitally signed PDF responses, with approval, DLP rules and flattening before signing | Passthrough of incoming signed PDFs for further signing, designed but disabled (section 3.6) |
+| Carrying finished, signed PDF responses out, with signature, content and DLP checks | Composing, approving and signing a response. That happens in the composing application, through the PKI service. Also out of scope: passthrough of incoming signed PDFs, designed but disabled (section 3.6) |
 | Release console on the external network, with delivery through the outtake folder | Recipient encryption and secure download portal |
 | Audit trail linked to a request ID | High availability |
 
@@ -54,8 +54,8 @@ Section 2.2 turns these rules into security requirements. Section 3.6 defines on
 - PDF output is acceptable for documents that arrive as Word or Excel files.
 - Volume is low to medium. This must be measured during the POC (section 10.6).
 - The organization can run an internal CA, or issue the certificates in section 4.4.
-- Signers use a qualified certificate, a trusted timestamp, and a tool that saves signatures incrementally.
-- The signing tool can reach a timestamp service from the internal network (section 3.4).
+- Responses are composed in another internal application and signed through the organisation's PKI service: the server seal first, then one or more user signatures. The seal, the signatures and the timestamp are all qualified.
+- One instance of the PKI service is reachable from both networks. The organisation accepts this as an exception to rule 2 (section 6.2).
 - The POC uses test data only, on one Docker host.
 - For the MVP, network teams can enforce the flow matrix in section 5.1 at a firewall that neither network administers.
 
@@ -73,7 +73,7 @@ Section 2.2 turns these rules into security requirements. Section 3.6 defines on
 | Container | A long-running Docker container, started from a pinned image |
 | Stack | A group of containers that work together, such as `ext-core` |
 | Sandbox | A short-lived container created for one document. Dangerzone starts these inside its VM |
-| VM | A separate virtual machine, used for the sanitizers in the POC and for everything in the MVP. The MVP may use a physical server instead |
+| VM | A separate virtual machine, used for the sanitizer in the POC and for everything in the MVP. The MVP may use a physical server instead |
 | POC, MVP | Proof of concept on test data, and the minimum viable product for real use |
 
 **Documents and their path**
@@ -95,12 +95,14 @@ Section 2.2 turns these rules into security requirements. Section 3.6 defines on
 | Package | The file that crosses the DMZ, in either direction |
 | Envelope, manifest | The signed public metadata of a package, and the signed list of files inside its encrypted payload (section 8) |
 | Ack | A package with no payload that confirms or rejects another package |
-| Base PDF | The approved, flattened PDF that a signer signs |
+| Composing application | The internal application, outside DXG, in which a response is written and signed |
+| PKI service | The organisation's eSign-API, outside DXG. It seals, signs and validates PDFs, and one instance is reachable from both networks |
+| Response folder | Where the composing application hands a finished response to DXG (section 5.3) |
 | Release | The act of sending an approved response from the external network |
 | Outtake folder | Where every released response leaves the pipeline |
 | Passthrough | The optional transfer of an incoming signed PDF without flattening (section 3.6) |
 
-Appendix E.6 lists the roles, such as operator, release officer, author, approver and signer.
+Appendix E.6 lists the roles, such as operator, release officer and reader.
 
 **Abbreviations**
 
@@ -108,7 +110,7 @@ Appendix E.6 lists the roles, such as operator, release officer, author, approve
 | --- | --- |
 | CDR | Content disarm and reconstruction |
 | DLP | Data loss prevention |
-| DSS | The European Commission's Digital Signature Service, used to validate signatures (section 4.3) |
+| DSS | The European Commission's Digital Signature Service. The eSign-API builds on it, and DXG uses its validation policy format and result names (section 4.3) |
 | PAdES | PDF Advanced Electronic Signatures |
 | QES, `QESig` | Qualified electronic signature, the highest level of electronic signature under eIDAS. It names a person |
 | Qualified seal, `QESeal` | Qualified electronic seal, the organisation's counterpart of a qualified signature. It names a legal person and proves origin and integrity |
@@ -132,8 +134,8 @@ Each requirement has an ID that stays the same when this document changes. The s
 | FR-05 | Unpack ZIP files within limits, and treat each file as a separate item |
 | FR-06 | Validate digitally signed PDFs before sanitization, and keep the original as evidence |
 | FR-07 | Give the internal side a sanitized copy, a signature status and an ETSI validation report |
-| FR-08 | Let a user on the internal network create a response linked to an open request, and have it digitally signed as a PDF |
-| FR-09 | Require a different user on the internal network to approve each response |
+| FR-08 | Accept a finished, signed response from the composing application, linked to an open request |
+| FR-09 | Require the server seal and at least one qualified user signature on each response. The signature is the approval |
 | FR-10 | Deliver approved responses to a release queue on the external network without sending them automatically |
 | FR-11 | Let an authorized user on the external network choose the recipient and channel for each response |
 | FR-12 | Require a second approver on the external network for sensitive responses and for recipient exceptions that policy marks |
@@ -160,11 +162,12 @@ Each requirement has an ID that stays the same when this document changes. The s
 | SR-10 | Administrative access is separate from data flows and is logged |
 | SR-11 | Adapters reach only their own folders, and have no access to keys, the database or evidence. An adapter host cannot open a connection to `ext-core` or `ext-release` |
 | SR-12 | A decrypted response reaches the outtake folder only after an authorized release |
-| SR-13 | A signed response must be the approved PDF with only signature data added |
-| SR-14 | Decrypted responses never reach a validator that parses hostile files |
+| SR-13 | A response leaves only if nothing in it changed after the server seal, other than added signatures |
+| SR-14 | Decrypted responses never reach the validator that parses files from the internet |
 | SR-15 | On the internal side, packages from the DMZ are collected, parsed and decrypted only by a component that has no console, no database and no package signing key (`int-package-sign`) |
 | SR-16 | The key that decrypts responses stays off the host that runs the external web application. So does every decrypted response, except a manual-channel file while an officer downloads it through the console |
 | SR-17 | The external console is reachable only from workstations on the wired campus network |
+| SR-18 | DXG sends the shared PKI service only finished responses, and never a file that came from the internet |
 
 ## 3. How it works
 
@@ -192,7 +195,7 @@ sequenceDiagram
 
     rect rgb(235, 245, 236)
         Note over O,I: Response going out
-        Note over I: Flatten and approve<br/>Sign with qualified<br/>certificate and timestamp
+        Note over I: A sealed, signed PDF arrives<br/>from the composing application.<br/>Check signatures and content
         I->>D: Upload encrypted package
         E->>D: Collect package
         Note over E: Officer chooses recipient<br/>Final signature check
@@ -227,12 +230,12 @@ flowchart LR
         N2["<b>2. ext-app</b><br/>Validates the drop,<br/>stores originals as evidence"]
         N3[["<b>3. ext-sanitizer VM</b><br/>Parses any .eml,<br/>rejects bad files,<br/>scans the rest"]]
         N4["<b>4. ext-app</b><br/>Operator selects<br/>the files to send"]
-        N5["<b>5. ext-validator</b><br/>Validates signed PDFs<br/>and returns the signed<br/>revision, with trust data<br/>from ext-egress"]
+        N5["<b>5. ext-validator</b><br/>Validates signed PDFs,<br/>with trust data<br/>from ext-egress"]
         N6[["<b>6. ext-sanitizer VM</b><br/>Flattens each file<br/>to a safe PDF, or<br/>normalizes a text file"]]
         N7["<b>7. ext-app</b><br/>Checks the PDFs,<br/>builds a signed,<br/>encrypted package"]
         N1 --> N2 --> N3 --> N4
         N4 -->|"Signed PDFs only"| N5
-        N5 -->|"Signed revision"| N6
+        N5 -->|"Validated"| N6
         N4 -->|"Other files"| N6
         N6 --> N7
     end
@@ -294,10 +297,8 @@ sequenceDiagram
     end
     Note over EC: Operator selects items
     opt Signed PDF
-        EC->>EV: validateSignature
+        EC->>EV: validate-signature
         EV-->>EC: Reports
-        EC->>EV: getOriginalDocuments
-        EV-->>EC: Signed revision
     end
     EC->>ES: convert or normalize-text, per selected item
     ES-->>EC: Flattened PDFs and normalized text
@@ -342,13 +343,13 @@ flowchart TB
     %% Dashed edge: optional path, off by default.
 
     IN["PDF with a signature"] --> EVID["Store original and SHA-256<br/>in evidence"]
-    EVID --> DSS["Validate with DSS and the<br/>strict policy"]
-    DSS -->|"DSS unavailable"| WAIT["Keep the item queued<br/>and alert"]
+    EVID --> DSS["Validate on ext-validator<br/>with the strict policy"]
+    DSS -->|"Validator unavailable"| WAIT["Keep the item queued<br/>and alert"]
     WAIT -->|"Retry"| DSS
     DSS --> WORST{"Worst indication<br/>across all signatures"}
 
     WORST -->|"TOTAL_PASSED"| SCOPE{"Signature scope"}
-    SCOPE -->|"Full"| EXTRACT["Extract signed revision of<br/>the latest signature"]
+    SCOPE -->|"Full"| EXTRACT["Signature accepted"]
     SCOPE -->|"Partial"| REVIEW["Operator review"]
     WORST -->|"INDETERMINATE"| REVIEW
     REVIEW -->|"Accept with reason<br/>(review_accepted)"| EXTRACT
@@ -358,7 +359,7 @@ flowchart TB
     FAILED -->|"false, the default"| REJECT
     FAILED -.->|"true, and the operator<br/>forwards it"| UNSIGNED["Sanitize as unsigned,<br/>state none"]
 
-    EXTRACT --> SANITIZE["Sanitize signed revision"]
+    EXTRACT --> SANITIZE["Flatten the whole file"]
     SANITIZE --> PACKAGE["Package sanitized copy,<br/>signature state and ETSI report"]
     UNSIGNED --> PACKAGE
 ```
@@ -366,119 +367,108 @@ flowchart TB
 Rules:
 
 - Sanitizing breaks a signature, so validation always happens first.
-- When the signature is in the first revision of the file, DSS returns no earlier revision. If the result is `TOTAL_PASSED` with full scope, the whole file is flattened. In any other case the item goes to operator review.
 - The original stays in the evidence store on the external network. By default, it does not reach the internal network.
 - `INDETERMINATE` often means an unknown trust anchor, missing revocation data, or a temporary outage. An operator decides, and the package records `review_accepted` rather than `passed`.
 - `TOTAL_FAILED` is a rejection. `ALLOW_FAILED_AS_UNSIGNED` can allow an operator to forward the document as unsigned, and defaults to `false`.
 - A PDF that hides its signature from screening is treated as unsigned and is still sanitized. This is a loss of evidence, not a security failure.
 
-DSS returns the revision **before** the chosen signature was added. The sanitized copy therefore shows the document as signed, but the visible stamp of the latest signature is absent. The consoles on both networks show the signer details from the report instead.
+The whole file is flattened, so the flattened copy shows every visible signature stamp. The consoles on both networks also show the signer details from the report.
 
-**Decision table for DSS results**
+**Decision table for validation results**
 
 | Indication | Signature scope | Action | State sent to the internal side |
 | --- | --- | --- | --- |
 | `TOTAL_PASSED` | Full | Continue | `passed` |
-| `TOTAL_PASSED` | Full, and DSS returns no earlier revision | Flatten the whole file | `passed` |
 | `TOTAL_PASSED` | Partial | Operator review | `review_accepted` if accepted |
 | `INDETERMINATE` | Any | Operator review | `review_accepted` if accepted |
 | `TOTAL_FAILED` | Any | Reject | None |
 | Multiple signatures | Any | Use the worst result | As above |
-| DSS unavailable | Any | Keep item queued and alert | None |
+| `ext-validator` unavailable | Any | Keep item queued and alert | None |
 
 ### 3.4 Response going out
 
-Every response leaves as a PDF signed with a qualified certificate and a trusted timestamp. Signing comes last, because flattening a file after signing would destroy the signature. Nothing may rewrite the file after it is signed.
+DXG does not write, approve or sign a response. Another internal application, the composing application, does that through the organisation's PKI service. DXG receives the finished PDF, checks it, and carries it out unchanged.
+
+A response is made in four steps, outside DXG:
+
+1. A user composes the response in the composing application.
+2. The PKI service flattens the form fields and annotations of the PDF, and applies the server seal with a qualified timestamp.
+3. One or more users sign the sealed PDF through the PKI service. Each signature is qualified. In the organisation's process, a signature is the approval of the response.
+4. The composing application places the finished PDF in the response folder (section 5.3).
 
 The flow diagram reads like the incoming one: arrows show the order of work, not network connections.
 
 ```mermaid
 flowchart LR
-    accDescr: Numbered document flow for a response going out, from the author to the recipient
+    accDescr: Numbered document flow for a response going out, from the composing application to the recipient
     %% Arrows show the order of work, not network connections.
     %% ext-app, int-app and int-verifier make every call. The DMZ never connects to either network.
-    %% Double side borders: VM.
     %% Arrows link the zones, not the steps, so that each zone keeps its own top-down layout.
 
     subgraph INT["Internal network"]
         direction TB
-        R1["<b>1. int-app</b><br/>Author uploads a draft<br/>for an open request"]
-        R2[["<b>2. int-sanitizer VM</b><br/>Flattens the draft to PDF<br/>and extracts its text"]]
-        R3["<b>3. int-app</b><br/>Runs DLP checks,<br/>then a different<br/>user approves"]
-        R4["<b>4. int-app</b><br/>Signer downloads the<br/>approved PDF, signs it with<br/>a qualified certificate and<br/>timestamp, and uploads it"]
-        R5["<b>5. int-app</b><br/>Confirms only a<br/>signature was added"]
-        R6["<b>6. int-validator</b><br/>Checks the signature early"]
-        R7["<b>7. int-app</b><br/>Builds a signed,<br/>encrypted package"]
-        R1 --> R2 --> R3 --> R4 --> R5 --> R6 --> R7
+        R1(["<b>1. Composing application</b><br/>Outside DXG. Composes the<br/>response, has it sealed and<br/>signed by the PKI service"])
+        R2["<b>2. int-app</b><br/>Collects the finished PDF<br/>from the response folder,<br/>for an open request"]
+        R3["<b>3. int-app</b><br/>Checks the seal and the<br/>signatures with the<br/>PKI service"]
+        R4["<b>4. int-app</b><br/>Runs the PDF policy<br/>and DLP checks"]
+        R5["<b>5. int-app</b><br/>Builds a signed,<br/>encrypted package"]
+        R1 --> R2 --> R3 --> R4 --> R5
     end
 
     subgraph DMZ["DMZ"]
         direction TB
-        R8["<b>8. dmz-export</b><br/>Holds the package<br/>until collected"]
+        R6["<b>6. dmz-export</b><br/>Holds the package<br/>until collected"]
     end
 
     subgraph EXT["External network"]
         direction TB
-        R9["<b>9. ext-app</b><br/>Verifies the package and<br/>queues it, still encrypted"]
-        R10["<b>10. ext-app</b><br/>Officer chooses recipient<br/>and channel. A second<br/>approver signs off when<br/>policy requires it"]
-        R11["<b>11. ext-release</b><br/>Decrypts the response,<br/>checks the approved<br/>prefix and PDF policy"]
-        R12["<b>12. ext-response-validator</b><br/>Checks the qualified<br/>signature and timestamp,<br/>via ext-egress"]
-        R13["<b>13. ext-release</b><br/>Writes the unchanged PDF<br/>to the outtake folder"]
-        R9 --> R10 --> R11 --> R12 --> R13
+        R7["<b>7. ext-app</b><br/>Verifies the package and<br/>queues it, still encrypted"]
+        R8["<b>8. ext-app</b><br/>Officer chooses recipient<br/>and channel. A second<br/>approver signs off when<br/>policy requires it"]
+        R9["<b>9. ext-release</b><br/>Decrypts the response,<br/>runs the PDF policy"]
+        R10["<b>10. ext-release</b><br/>Checks the seal and the<br/>signatures again with<br/>the PKI service"]
+        R11["<b>11. ext-release</b><br/>Writes the unchanged PDF<br/>to the outtake folder"]
+        R7 --> R8 --> R9 --> R10 --> R11
     end
 
     subgraph OUT["Outside"]
         direction TB
-        REC(["<b>Recipient</b><br/>Gets the signed PDF<br/>by a manual route"])
+        REC(["<b>Recipient</b><br/>Gets the signed PDF<br/>through the chosen channel"])
     end
 
     INT -->|"Uploaded<br/>by int-app"| DMZ
     DMZ -->|"Collected<br/>by ext-app"| EXT
-    EXT -->|"Collected from<br/>the outtake folder"| OUT
+    EXT -->|"Through an<br/>outtake adapter"| OUT
 
     classDef step fill:#eef0fb,stroke:#7b7fc4,color:#1f1f1f
-    classDef vm fill:#fbe3d9,stroke:#c8642e,stroke-width:2px,color:#1f1f1f
-    class R1,R3,R4,R5,R6,R7,R8,R9,R10,R11,R12,R13,REC step
-    class R2 vm
+    class R1,R2,R3,R4,R5,R6,R7,R8,R9,R10,R11,REC step
     style OUT fill:#f3f3f3,stroke:#9a9a9a
     style EXT fill:#eaf2fb,stroke:#8fb4e0
     style DMZ fill:#fff4dd,stroke:#d8b85a
     style INT fill:#ebf5ec,stroke:#7fbf8a
 ```
 
-In the POC, the signed PDF stays in the outtake folder until it is collected. The MVP adds a mail adapter after step 13.
-
 The same flow as calls between components:
 
 ```mermaid
 sequenceDiagram
-    accDescr: Sequence of the response flow from author to release queue
+    accDescr: Sequence of the response flow from the composing application to the release queue
     %% Each arrow points from the side that opens the connection.
     %% Dashed arrows are replies on the same connection.
     autonumber
-    actor AU as Internal author
-    actor AP as Internal approver
-    actor SI as Internal signer
+    participant CA as Composing application
+    participant PK as PKI service
     participant IC as int-app
-    participant IS as int-sanitizer
-    participant IV as int-validator
-    participant IVF as int-verifier
     participant DE as dmz-export
+    participant IVF as int-verifier
     participant DI as dmz-import
     participant EC as ext-app
 
-    AU->>IC: Upload draft for an open request
-    IC->>IS: Flatten to PDF
-    IS-->>IC: Flattened PDF and text
-    Note over IC: PDF policy and DLP checks
-    AU->>IC: Submit for approval
-    AP->>IC: Review rendered PDF and approve
-    SI->>IC: Download approved PDF
-    Note over SI: Sign with a qualified certificate<br/>and timestamp, saving incrementally
-    SI->>IC: Upload signed PDF
-    Note over IC: Append and PDF policy checks
-    IC->>IV: Validate signature
-    IV-->>IC: Validation result and report
+    CA->>PK: Seal, then user signatures
+    Note over CA,IC: Finished PDF placed in the response folder
+    Note over IC: Check the drop and<br/>that the request is open
+    IC->>PK: validate-signature
+    PK-->>IC: Validation report
+    Note over IC: Signature rule, PDF policy<br/>and DLP checks
     Note over IC: Sign manifest, encrypt,<br/>sign envelope
     IC->>DE: Upload, then rename into place
     EC->>DE: Download
@@ -487,50 +477,45 @@ sequenceDiagram
     EC->>DI: Upload ack, then rename into place
     IC->>IVF: fetch
     IVF->>DI: Download ack
-    IC->>DE: Delete the acknowledged package
     IVF-->>IC: Verified ack
-    Note over IC: Mark the response as sent
+    IC->>DE: Delete the acknowledged package
+    Note over IC: Mark the response as sent,<br/>write the result to the response folder
 ```
 
 Rules:
 
-- Drafts are flattened on the internal network. This removes metadata, comments, tracked changes, hidden sheets and embedded objects.
-- The author and approver must be different accounts. The signer may also be the approver.
 - A response may only be linked to a request that is open on the internal network.
-- A flattened draft is at most `MAX_RESPONSE_PAGES` pages and `MAX_RESPONSE_BYTES` in size.
-- The internal side can mark a response `sensitive`. It cannot supply a recipient, subject, body or header.
+- The composing application can mark a response `sensitive`. Nothing on the internal side can supply a recipient, subject, body or header.
+- A response is at most `MAX_RESPONSE_PAGES` pages and `MAX_RESPONSE_BYTES` in size.
+- DXG never changes the file. A correction is a new version from the composing application, and it supersedes any unreleased version.
 - `ext-app` can verify the envelope without decrypting the payload, so the response stays encrypted until release.
 
-Checks after signing:
+Checks by `int-app` before it builds a package:
 
-1. `signature_append_check.py` confirms that the file is the approved PDF with data appended only, that a new signature exists, that page content is unchanged, and that the addition is within `SIGNATURE_MAX_APPEND_BYTES`.
-2. `pdf_policy.py signed` confirms that no active content was added. Exit `2` is accepted, because a signer may lock the final document.
-3. `int-validator` runs DSS with the strict policy. `TOTAL_FAILED` blocks the response. `INDETERMINATE` is allowed here only for revocation data that the internal network cannot reach, because the external side makes the final check.
+1. The drop is valid, and its request is open (section 5.3).
+2. The PKI service validates the file with the strict policy, and the signature rule below holds.
+3. `pdf_policy.py signed` confirms that the file has no active content and no attachments. Exit `2` is accepted, because the last signer may lock the document.
+4. The DLP rules pass on the text of the PDF, which `int-app` extracts in a restricted subprocess.
 
-**Response signature rule.** A response can be released only when DSS on `ext-response-validator` reports all of the following:
+A failed check rejects the response. `int-app` writes the reason to the response folder, and the composing application submits a corrected version.
 
-| Requirement | DSS value |
+**Response signature rule.** A response can leave only when the PKI service reports all of the following. `int-app` checks the rule before packaging, and `ext-release` checks it again at release (appendix D.4).
+
+| Requirement | Value in the validation report |
 | --- | --- |
-| Valid signature | `TOTAL_PASSED` |
-| Qualified signature or seal | Level is in `RESPONSE_SIGNATURE_LEVELS`, which defaults to `QESig` and `QESeal` |
-| Timestamped signature | Format is `PAdES-BASELINE-T`, `-LT` or `-LTA` |
-| Trusted timestamp | Timestamp is valid. With `REQUIRE_QUALIFIED_TIMESTAMP`, its level is `QTSA` |
-| Signed after approval | Timestamp is later than `approved_at` |
-| Whole document covered | Signature scope is full |
+| Everything valid | The seal and every signature are `TOTAL_PASSED` |
+| Server seal | The first signature in the file is at level `QESeal` |
+| Approval | At least one later signature is at level `QESig` |
+| Accepted levels only | Every level is in `RESPONSE_SIGNATURE_LEVELS`, which defaults to `QESig` and `QESeal` |
+| Timestamped | Each format is `PAdES-BASELINE-T`, `-LT` or `-LTA` |
+| Trusted timestamp | Each timestamp is valid. With `REQUIRE_QUALIFIED_TIMESTAMP`, its level is `QTSA` |
+| Nothing changed after sealing | The strict policy finds no change after the seal other than added signatures, and the latest signature covers the whole document |
 
-There is no manual override. If revocation data is temporarily unavailable, the release waits and retries. If the rule fails, the internal side creates a new signed version. A level such as `AdESig-QC` or `AdESeal-QC` shows a qualified certificate, but not a qualified signature or seal, so it fails the rule. In the rest of this document, "signature" on a response means either a qualified signature or a qualified seal.
+There is no manual override. If revocation data or the PKI service is temporarily unavailable, the check waits and retries. If the rule fails, the composing application creates a new version. A level such as `AdESig-QC` or `AdESeal-QC` shows a qualified certificate, but not a qualified signature or seal, so it fails the rule.
 
-A failed check returns the response to the signer. Rewriting a PDF on save fails the append check, so the signing tool must save incrementally. A document timestamp added after signing is allowed, because it is also an appended update. It does not count as a signature.
+**What the PKI service flattens.** Before sealing, the PKI service turns form fields and annotations into page content, and removes actions, outlines, forms and JavaScript. This is not the flattening that DXG applies to incoming files: text, fonts and images stay as they are. DXG can therefore read real text for DLP, but it cannot remove content that is hidden inside a page (section 6.2).
 
-In the MVP, the signer downloads the approved PDF, signs it with an existing tool, and uploads the result. An integrated signing service can replace this later without changing the checks. Qualified signing certificates are separate from the package keys in section 4.4.
-
-**Timestamp access.** The internal network has no internet route, so confirm how the signing tool reaches a timestamp service before phase 3.
-
-| Option | How it works | Trade-off |
-| --- | --- | --- |
-| Existing service reachable internally | The tool already reaches a trusted timestamp service | No design change. The service must meet the signature rule |
-| Timestamp proxy in the DMZ | A dedicated DMZ host forwards RFC 3161 requests from signing workstations to one timestamp service | Adds a narrow outbound path that carries hashes. It needs a security review, because it is an exception to rule 2 in section 1.1 |
-| Document timestamp on the external side | The external side adds the timestamp before release | Not recommended. It proves the release time rather than the signing time, and the file would no longer be byte for byte what the internal side approved |
+**The PKI service.** It is the organisation's eSign-API, and it is outside DXG. One instance is reachable from both networks, which is an accepted exception to rule 2 in section 1.1 (section 6.2). DXG sends it only finished responses, and never a file that came from the internet (SR-18). Incoming signed PDFs are validated by a separate instance, `ext-validator` (section 3.3).
 
 ### 3.5 Release
 
@@ -569,7 +554,7 @@ stateDiagram-v2
     closed --> [*]
 ```
 
-When an officer starts a release, `ext-release` decrypts the response and runs the checks in appendix D.4. The response must meet the signature rule in section 3.4, and a failed check blocks the release.
+When an officer starts a release, `ext-release` decrypts the response and runs the checks in appendix D.4. The response must meet the signature rule in section 3.4 again, and a failed check blocks the release.
 
 Release rules:
 
@@ -605,11 +590,11 @@ This diagram shows every component and allowed connection in the POC.
 
 - **Each solid rectangle is one Docker container.**
 - **Each dashed rectangle is a stack of related containers.**
-- **Each orange box with double side borders is a VM.** The two sanitizers run Dangerzone in VMs.
+- **Each orange box with double side borders is a VM.** `ext-sanitizer` runs Dangerzone in a VM.
 - **Rounded boxes are outside DXG**, such as services that DXG uses but does not manage.
 - **Hexagons are people** using a console.
 - **Each arrow** points from the side that opens the connection. Its label starts with the flow ID from section 5.1 and says what the connection is for.
-- **The dotted lines** are the hand-offs through the intake and outtake folders, which have no network connection.
+- **The dotted lines** are the hand-offs through the intake, outtake and response folders, which have no network connection.
 
 ```mermaid
 flowchart TB
@@ -629,9 +614,12 @@ flowchart TB
         EXTCORE["ext-core stack: 3 containers<br/>ext-proxy, ext-app,<br/>ext-postgres"]
         EXTREL["ext-release<br/>Decrypts at release,<br/>holds the outtake folder"]
         EXTSAN[["ext-sanitizer VM<br/>Dangerzone, ClamAV"]]
-        EXTVAL["ext-validator<br/>DSS"]
-        RESPVAL["ext-response-validator<br/>DSS"]
+        EXTVAL["ext-validator<br/>eSign-API, validation only"]
         EGRESS["ext-egress<br/>Filtering proxy"]
+    end
+
+    subgraph SHARED["Outside DXG, reachable from both networks"]
+        PKI(["PKI service<br/>eSign-API"])
     end
 
     subgraph DMZ["DMZ"]
@@ -640,11 +628,10 @@ flowchart TB
     end
 
     subgraph INT["Internal network"]
-        INTUSERS{{"Author, approver<br/>and signer"}}
+        INTUSERS{{"Reader"}}
+        COMPOSE(["Composing application"])
         INTCORE["int-core stack: 3 containers<br/>int-proxy, int-app,<br/>int-postgres"]
         INTVER["int-verifier<br/>Collects and checks packages"]
-        INTSAN[["int-sanitizer VM<br/>Dangerzone"]]
-        INTVAL["int-validator<br/>DSS"]
     end
 
     FILES -.-|"Intake folder,<br/>no network connection"| EXTCORE
@@ -654,10 +641,9 @@ flowchart TB
     EXTCORE -->|"F4 Check signed PDFs"| EXTVAL
     EXTCORE -->|"F16 Start a release"| EXTREL
     EXTREL -->|"F17 Database"| EXTCORE
-    EXTREL -->|"F12 Check signed responses"| RESPVAL
+    EXTREL -->|"F12 Check signed responses"| PKI
     EXTCORE -->|"F10 ClamAV updates"| EGRESS
     EXTVAL -->|"F5 Trust data"| EGRESS
-    RESPVAL -->|"F13 Trust data"| EGRESS
     EGRESS -->|"F6 Allowlisted hosts only"| TRUST
     EXTCORE -->|"F7 Upload imports,<br/>acks, status"| DMZI
     EXTCORE -->|"F7 Collect responses<br/>and acks"| DMZE
@@ -665,8 +651,8 @@ flowchart TB
     INTCORE -->|"F15 Fetch verified packages"| INTVER
     INTCORE -->|"F8 Upload responses and acks"| DMZE
     INTUSERS -->|"F2 Console"| INTCORE
-    INTCORE -->|"F9 Flatten drafts, extract text"| INTSAN
-    INTCORE -->|"F11 Check signed responses"| INTVAL
+    INTCORE -->|"F11 Check signed responses"| PKI
+    COMPOSE -.-|"Response folder"| INTCORE
 
     %% Layout only: stack the DMZ hosts so that no edge runs between them.
     DMZI ~~~ DMZE
@@ -677,11 +663,11 @@ flowchart TB
     classDef vm fill:#fbe3d9,stroke:#c8642e,stroke-width:2px,color:#1f1f1f
     classDef service fill:#eef0fb,stroke:#7b7fc4,color:#1f1f1f
     classDef people fill:#ffffff,stroke:#666666,color:#1f1f1f
-    class EXTVAL,RESPVAL,EGRESS,DMZI,DMZE,INTVAL,INTVER,EXTREL container
+    class EXTVAL,EGRESS,DMZI,DMZE,INTVER,EXTREL container
     class EXTCORE extStack
     class INTCORE intStack
-    class EXTSAN,INTSAN vm
-    class FILES,TRUST service
+    class EXTSAN vm
+    class FILES,TRUST,PKI,COMPOSE service
     class EXTUSERS,INTUSERS people
     style OUT fill:#f3f3f3,stroke:#9a9a9a
     style EXT fill:#eaf2fb,stroke:#8fb4e0
@@ -689,19 +675,19 @@ flowchart TB
     style INT fill:#ebf5ec,stroke:#7fbf8a
 ```
 
-Section 4.2 describes each host, and section 5.1 gives the ports. Timestamp access for signers is not shown, because it depends on the decision in section 3.4.
+Section 4.2 describes each host, and section 5.1 gives the ports.
 
 ### 4.2 What each component does
 
-The POC runs the two sanitizers in VMs and everything else in Docker containers on one host (appendix E.8). The MVP keeps the same components and connections, but gives each component or stack its own VM, with clean snapshots and a firewall on each host. Internal and DMZ workloads run on hardware that does not also host external workloads, because a shared hypervisor is a path between the networks.
+The POC runs the sanitizer in a VM and everything else in Docker containers on one host (appendix E.8). The MVP keeps the same components and connections, but gives each component or stack its own VM, with clean snapshots and a firewall on each host. Internal and DMZ workloads run on hardware that does not also host external workloads, because a shared hypervisor is a path between the networks.
 
 **External network**
 
 **`ext-app`** (in `ext-core`). External web app: operator and release console, intake worker, workflow and packaging. These share one container because they share code and trust level. The console is reachable only from workstations on the wired campus network (SR-17).
-- Software: Laravel, Vue, OpenSSL. Holds: `ext-package-sign`, the DSS client key, SFTP, spool and agent keys, the `release-ext` key that starts a release, database credentials, the evidence store. Connections: F1 in; F3, F4, F7, F10, F16 and A1 out.
+- Software: Laravel, Vue, OpenSSL. Holds: `ext-package-sign`, the API key for `ext-validator`, SFTP, spool and agent keys, the `release-ext` key that starts a release, database credentials, the evidence store. Connections: F1 in; F3, F4, F7, F10, F16 and A1 out.
 
 **`ext-release`**. The release service: decrypts an approved response at release, runs the final checks (appendix D.4) and writes the file to the outtake folder. In the MVP it runs on its own VM, apart from `ext-core`, and the outtake folder is on that VM (SR-16). Root on `ext-core` can then read neither the release key nor a decrypted response. The one exception is a manual-channel file, which passes through `ext-app` while an officer downloads it.
-- Holds: `ext-release-enc`, the release decryption key, as its only holder, its own DSS client key, spool keys and database credentials, and the outtake folder. Connections: F16 in; F12, F17 and A2 out.
+- Holds: `ext-release-enc`, the release decryption key, as its only holder, its own API key for the PKI service, spool keys and database credentials, and the outtake folder. Connections: F16 in; F12, F17 and A2 out.
 - It accepts the approvals that `ext-app` recorded in the database, and cannot check them itself (section 6.2).
 
 **`ext-proxy`, `int-proxy`** (in `ext-core` and `int-core`). A small reverse proxy in front of each console. It terminates TLS, holds the console certificate, and forwards only to its web application. It is the only container in its stack with a published port.
@@ -711,13 +697,10 @@ The POC runs the two sanitizers in VMs and everything else in Docker containers 
 **`ext-sanitizer`** (VM). The only place untrusted files are opened: parses mail, detects type (Magika), scans (ClamAV), checks macros (oletools), unpacks ZIP files and flattens documents to PDF (Dangerzone).
 - Software: a Python agent behind an SSH forced command (appendix D.1); Dangerzone starts one sandbox per document. Holds: no keys or credentials. Connections: F3 in, nothing out. Restored from a clean snapshot daily, because it is the host most likely to be compromised.
 
-**`ext-validator`**. EU DSS for incoming signed PDFs: validates signatures and extracts the signed revision.
+**`ext-validator`**. An instance of the eSign-API that DXG runs on the external network, for incoming signed PDFs only. It validates signatures against the EU trusted lists. Signing is not configured on it.
 - Connections: F4 in; F5 out, to `ext-egress` only. It parses hostile PDFs and needs the internet, so the proxy allowlist stops URLs in a hostile certificate from probing internal systems.
 
-**`ext-response-validator`**. A second EU DSS that checks signed responses at release. It never receives files from the internet.
-- Connections: F12 in; F13 out, to `ext-egress` only. Kept apart so that decrypted responses never reach a host that parses hostile PDFs (SR-14).
-
-**`ext-egress`**. Squid proxy that allows only trust lists, OCSP, CRL, timestamp hosts and ClamAV updates (appendix E.4). The only outbound path for trust data. Holds no keys. Connections: F5, F10, F13 in; F6 out.
+**`ext-egress`**. Squid proxy that allows only trust lists, OCSP, CRL, timestamp hosts and ClamAV updates (appendix E.4). The only outbound path for `ext-validator` and for antivirus updates. Holds no keys. Connections: F5, F10 in; F6 out.
 
 **`ext-mail-adapter`** (MVP). Fetches mail over IMAP (M1) and sends released responses over SMTP (M2). It runs on its own host with a spool (section 5.2): `ext-app` collects its drops and `ext-release` delivers to it (A1, A2). No keys, no database, and no connection to `ext-core` or `ext-release`.
 
@@ -727,15 +710,15 @@ The POC runs the two sanitizers in VMs and everything else in Docker containers 
 
 **Internal network**
 
-**`int-app`** (in `int-core`). Internal web app: stores verified documents, and runs drafting, approval, the signing upload, DLP and response packaging.
-- Software: Laravel, Vue, OpenSSL. Holds: `int-package-sign`, the DSS client key, SFTP, agent and verifier keys, database credentials. Connections: F2 in; F8, F9, F11, F15 out. No route to the external network or the internet.
+**`int-app`** (in `int-core`). Internal web app: stores verified documents for readers, collects finished responses from the response folder, checks them and builds response packages.
+- Software: Laravel, Vue, OpenSSL. Holds: `int-package-sign`, its API key for the PKI service, SFTP and verifier keys, database credentials, the response folder. Connections: F2 in; F8, F11, F15 out. No route to the external network or the internet, apart from the PKI service.
 
 **`int-verifier`**. The only internal component that connects to `dmz-import` and parses what arrives from it. It collects packages, verifies and decrypts them, and checks every PDF (SR-15). `int-app` drives it through a forced-command interface (appendix D.5).
 - Software: a small agent, OpenSSL, the PDF checks (appendix F). Holds: `int-import-enc` and the SFTP key for `dmz-import`. It has no console, no database and no package signing key (`int-package-sign`). Connections: F15 in; F14 out. Kept apart from `int-app` so that a flaw in the SFTP client, the tar reader, CMS parsing or PDF parsing does not land in the component that holds the internal documents and the package signing key (`int-package-sign`).
 
-**`int-sanitizer`** (VM). Dangerzone behind the same kind of agent: flattens response drafts and extracts their text for DLP. Connections: F9 in, nothing out. Separate from `ext-sanitizer`, because one VM serving both networks would be a path between them.
+**PKI service** (outside DXG). The organisation's eSign-API. The composing application uses it to seal and sign responses. `int-app` and `ext-release` use it to validate them (F11, F12). One instance is reachable from both networks and reaches a cloud signature provider, so it is a path between the networks that DXG does not control (section 6.2). DXG never sends it a file from the internet (SR-18).
 
-**`int-validator`**. EU DSS with no network and a reviewed trust-list snapshot (appendix E.3). Checks signed responses before they leave. Connections: F11 in.
+**Composing application** (outside DXG). The internal application in which users write a response and sign it through the PKI service. It hands the finished PDF to DXG through the response folder (section 5.3).
 
 ### 4.3 Software used
 
@@ -747,7 +730,7 @@ Confirm licenses again when pinning versions.
 | Magika | Google's machine-learning file-type detector. It reads the content, not the extension | 1.0.1 | Apache-2.0 |
 | ClamAV | Open-source antivirus that catches known malware early | Current stable | GPL-2.0 |
 | oletools (`olevba`) | Finds macros in Office files | Current stable | BSD-2-Clause |
-| EU DSS | The European Commission's Digital Signature Service, in Java. Validates PAdES signatures against the EU trusted lists | 6.5.1 | LGPL-2.1 |
+| eSign-API | The organisation's signing and validation service, built on EU DSS. DXG runs one validation-only instance as `ext-validator`, and calls the shared PKI service for responses | 2.3.1 | Internal |
 | Squid | Forward proxy, used here as an allowlist | Distribution version | GPL-2.0 |
 | OpenSSH | SFTP-only server on the DMZ hosts, and the transport for agent commands | Distribution version | BSD-style |
 | nftables | Host firewall on each MVP host | Distribution version | GPL-2.0 |
@@ -755,7 +738,7 @@ Confirm licenses again when pinning versions.
 | pikepdf, qpdf | Inspect PDF structure for the PDF checks (appendix F) | 10.18.0, 12.4.2 | MPL-2.0, Apache-2.0 |
 | Laravel, Vue | Web app and console UI on both sides | Current stable | MIT |
 | PostgreSQL | Database and job queue | 16 or later | PostgreSQL License |
-| Docker, KVM | POC hosting: containers, and VMs for the sanitizers | Not pinned | Apache-2.0 (Docker Engine), GPL-2.0 (KVM) |
+| Docker, KVM | POC hosting: containers, and a VM for the sanitizer | Not pinned | Apache-2.0 (Docker Engine), GPL-2.0 (KVM) |
 | Lidi | ANSSI software for hardware data diodes, used only for the optional diode path (section 11.2) | Current stable | LGPL-3.0 |
 
 ### 4.4 Keys and certificates
@@ -766,12 +749,12 @@ Confirm licenses again when pinning versions.
 | `int-import-enc` | `int-verifier` | Decrypt import payloads |
 | `int-package-sign` | `int-app` | Sign response packages and acks |
 | `ext-release-enc` | `ext-release` | Decrypt responses at release |
-| `ext-dss-client` | `ext-app` | Authenticate to `ext-validator` |
-| `ext-release-dss-client` | `ext-release` | Authenticate to `ext-response-validator` |
-| `int-dss-client` | `int-app` | Authenticate to `int-validator` |
+| `ext-validator-key` | `ext-app` | API key for `ext-validator` |
+| `ext-release-pki-key` | `ext-release` | API key for the PKI service |
+| `int-pki-key` | `int-app` | API key for the PKI service |
 | `ext-console-tls`, `int-console-tls` | `ext-proxy`, `int-proxy` | TLS server certificates for the two consoles |
 | `sftp-ext-*`, `sftp-int-*` | `ext-app`, `int-app`, `int-verifier` | Separate SSH keys per host and direction. `int-verifier` holds the key for `dmz-import`, and `int-app` the key for `dmz-export` |
-| `agent-ext`, `agent-int` | `ext-app`, `int-app` | Run agent commands |
+| `agent-ext` | `ext-app` | Run agent commands |
 | `verifier-int` | `int-app` | Run verifier commands |
 | `release-ext` | `ext-app` | Start a release on `ext-release` |
 | `spool-ext-*` | `ext-app`, `ext-release` | One SSH key per adapter spool and direction. `ext-app` collects drops, and `ext-release` delivers items |
@@ -783,7 +766,7 @@ Rules:
 - Store private keys in files that one service user can read, in the POC and in the MVP. Hardware protection is in the backlog (section 11.2).
 - A root CA for this system should be offline. It may be a dedicated private CA used only for DXG.
 
-Qualified certificates used to sign response PDFs are outside DXG. They are held on the signer's qualified device or service, and they are not package keys.
+The qualified certificates that seal and sign response PDFs are outside DXG. The PKI service and its cloud signature provider hold them, and they are not package keys.
 
 **Key compromise response:**
 
@@ -803,24 +786,22 @@ The matrix names hosts, so it says `ext-core` for `ext-app` and `ext-postgres`. 
 | ID | Source | Destination | Port | Purpose |
 | --- | --- | --- | --- | --- |
 | F1 | Operator browser on the wired campus network | `ext-core` | 8080 | Console only, over TLS: select files, review results, release responses |
-| F2 | Internal user browser | `int-core` | 8081 | Console only, over TLS: work on requests, approve and sign responses |
+| F2 | Internal user browser | `int-core` | 8081 | Console only, over TLS: read documents, follow the status of responses |
 | F3 | `ext-core` | `ext-sanitizer` | 22 | Run agent commands |
-| F4 | `ext-core` | `ext-validator` | 8443 | DSS REST calls |
+| F4 | `ext-core` | `ext-validator` | 8443 | Validation calls for incoming signed PDFs |
 | F5 | `ext-validator` | `ext-egress` | 3128 | Trust lists, OCSP, CRL, TSA |
 | F6 | `ext-egress` | Allowlisted hosts | 80, 443 | Same traffic, after filtering |
 | F7 | `ext-core` | `dmz-import`, `dmz-export` | 22 | Push packages, pull packages, collect DMZ logs |
 | F8 | `int-core` | `dmz-export` | 22 | Push packages |
-| F9 | `int-core` | `int-sanitizer` | 22 | Run agent commands |
 | F10 | `ext-core` | `ext-egress` | 3128 | ClamAV definition updates |
-| F11 | `int-core` | `int-validator` | 8443 | DSS REST calls |
-| F12 | `ext-release` | `ext-response-validator` | 8443 | DSS REST calls at release |
-| F13 | `ext-response-validator` | `ext-egress` | 3128 | Trust lists, OCSP, CRL, TSA |
+| F11 | `int-core` | PKI service | 443 | Validation calls for responses |
+| F12 | `ext-release` | PKI service | 443 | Validation calls at release |
 | F14 | `int-verifier` | `dmz-import` | 22 | Pull packages |
 | F15 | `int-core` | `int-verifier` | 22 | Run verifier commands |
 | F16 | `ext-core` | `ext-release` | 22 | Start a release, hand over the encrypted package |
 | F17 | `ext-release` | `ext-core` | 5432 | Read the release, record the result and the audit event |
 
-`ext-sanitizer`, `int-sanitizer`, `int-validator` and both DMZ hosts have no outbound rules. `int-verifier` has one, F14. `int-core` has no route to the external network or the internet.
+`ext-sanitizer` and both DMZ hosts have no outbound rules. `int-verifier` has one, F14. `int-core` has no route to the external network or the internet. F11 and F12 reach the same PKI service from both networks, which is the accepted exception to rule 2. Flow IDs F9 and F13 are no longer used.
 
 In the POC, the two console ports are published only on the Docker host's loopback address. In the MVP, the zone firewall allows F1 only from the wired campus network, and not from the internet or any other network.
 
@@ -837,7 +818,7 @@ The MVP adds these flows. A1 and A2 apply to every adapter that runs on its own 
 
 The pipeline starts at a folder and ends at a folder. It does not know where a request came from or how a response leaves. An adapter is anything that puts a request into the intake folder or takes a released response out of the outtake folder. Mail is one adapter of each kind. A new adapter does not change the pipeline (FR-16).
 
-Every adapter follows the same three small formats: a drop on the way in, and a delivery item and a result on the way out. Sanitization, the DMZ transfer, approvals and human release are the same for all of them.
+Every adapter follows the same three small formats: a drop on the way in, and a delivery item and a result on the way out. Sanitization, the DMZ transfer and human release are the same for all of them.
 
 **Folders.** The intake folder sits on `ext-core` and the outtake folder on `ext-release`. Neither is a network share.
 
@@ -994,6 +975,62 @@ The adapter checks `expires_at` and the file hash, delivers the file, writes a r
 3. Any flows of its own to the outside, like M1 and M2 for mail.
 4. The adapter tests for it: T-12 to T-16 and T-18 for intake, T-43 and T-44 for outtake, and T-47 for a spool host.
 
+### 5.3 Response folder
+
+The response folder is where the composing application hands a finished response to DXG, and where DXG reports what became of it. It sits on `int-core` and follows the pattern of the intake folder in section 5.2.
+
+```text
+/srv/dxg/responses/
+  .incoming/<response-id>/        Composing application is still writing
+  ready/<response-id>/            Complete drop, waiting for int-app
+  processing/<response-id>/       Claimed by int-app
+  rejected/<response-id>/         Failed validation, kept for analysis
+  results/<response-id>.json      Outcome, written by int-app
+```
+
+The composing application attaches in one of the two ways in section 5.2: locally, under its own service account on `int-core`, or through a spool on its own host that `int-app` collects from and writes results to. Which one is used is a decision for the owner of that application (section 12.1).
+
+A drop holds `response.json` and the signed PDF:
+
+```json
+{
+  "schema": "dxg-response-drop/1",
+  "response_id": "0195f7c1-33aa-7e02-9d10-6b2f8c1a4e77",
+  "request_id": "0195f7a2-6f7e-7c1a-9a44-1b1f4c2e7d10",
+  "source": { "application": "compose", "reference": "R-2026-0042" },
+  "sensitivity": "normal",
+  "file": "signed.pdf",
+  "sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+  "bytes": 214880
+}
+```
+
+`int-app` renames a drop into `processing/` and then checks it, in this order:
+
+1. The directory name is a UUID that matches `response_id`.
+2. The drop contains only `response.json` and the listed file, both regular files.
+3. `response.json` is within its size limit and matches the schema. The schema has no recipient, subject or free-text field.
+4. `source.application` is registered, and `source.reference` has not been seen before for it.
+5. The file matches its size and SHA-256 hash, and is within `MAX_RESPONSE_BYTES`.
+6. `request_id` names a request that is open on the internal network.
+
+A valid drop then goes through the checks in section 3.4. `int-app` gives the response the next version number for its request.
+
+`int-app` writes the outcome to `results/`, and rewrites the file each time the status changes:
+
+```json
+{
+  "schema": "dxg-response-result/1",
+  "response_id": "0195f7c1-33aa-7e02-9d10-6b2f8c1a4e77",
+  "version": 1,
+  "status": "rejected",
+  "reason": "signature",
+  "updated_at": "2026-11-04T10:44:02Z"
+}
+```
+
+`status` is `sent`, `rejected`, `released` or `expired`. `reason` is present only with `rejected`, and is one of `schema`, `request_state`, `size`, `signature`, `pdf_policy`, `dlp` or `rejected_by_ext`. Neither field is free text.
+
 ## 6. Threat model and limitations
 
 Section 6.1 lists what can go wrong and what limits the damage. Section 6.2 lists what the design does not do at all.
@@ -1009,25 +1046,27 @@ Section 6.1 lists what can go wrong and what limits the damage. Section 6.2 list
 | Compromised `ext-core` | The release key and decrypted responses are on `ext-release`, except a manual-channel file while an officer downloads it. The console is reachable only from the wired campus network. The internal side verifies every import and re-checks every PDF | Attacker can read every collected request, the evidence store and queued imports, and can sign packages until the key is revoked. Attacker can also record false approvals, and so release any queued response to a recipient of their choice. Attacker cannot change a response |
 | Compromised DMZ host | Encryption, signatures, sequence numbers | Denial of service, and exposure of envelope metadata |
 | Forged validation report | Package signature, signing key held only by `ext-app` | The internal side trusts the external validator result, so `ext-core` compromise affects it |
-| Malware on the internal network leaking data | Response needs an open request, approval, DLP, size limits, flattening before signing, append check, no recipient control | Data hidden in page images cannot be reliably detected |
+| Malware on the internal network leaking data | A response needs an open request, the server seal and a qualified user signature, DLP on its text, size limits, and has no recipient control. The PKI service removes forms, actions and JavaScript before sealing | Data hidden inside page content or images cannot be reliably detected, and DXG no longer rebuilds responses as images |
 | Compromised internal system sets a recipient | Schema has no recipient field, and the external side chooses the recipient | None for address selection |
 | Compromised external workstation | Server-side send, MFA, second approver | Workstation can mislead its own user, and manual downloads expose plaintext |
-| Altered response after approval | Append and page content checks on the internal side, prefix and signature checks at release | A signature appearance can carry a small amount of hidden data, within the size limit |
+| Altered response after signing | Any change breaks the seal or a signature. The PKI service checks this for `int-app` and again for `ext-release` | A change made before the seal is not visible to DXG |
 | Compromised or faulty adapter | Separate accounts or a separate host, strict drop validation, no access to keys or evidence, no connection to `ext-core` or `ext-release` | Adapter can submit unwanted requests, and can read its own outtake channel |
 | Replay or reordering | Unique package IDs, per-direction sequence numbers | Delay is possible |
 | SSH client attack from DMZ | The client that downloads from the DMZ runs on `int-verifier`, which has no console, database or package signing key (`int-package-sign`). `int-app` only uploads. Minimal SFTP client, patching | Residual risk until a hardware diode replaces the path |
 | Compromised `int-verifier` | No console, database or package signing key (`int-package-sign`), one outbound flow, output read by `int-app` with a strict reader | Attacker can read import payloads, and can hand `int-app` a forged document that users then open |
-| Signed PDF manipulation | Strict DSS policy, signed revision used for sanitization | Hidden content in a signed revision is rendered as it appears in that revision |
+| Signed PDF manipulation | Strict validation policy on `ext-validator`, and the whole file is flattened | Hidden content in a signed file is rendered as it appears |
+| Compromised PKI service | DXG sends it only finished responses, never a file from the internet. `ext-validator` is a separate instance | It is reachable from both networks and from a cloud provider, so it is a path between the networks. A compromised service could also report a false validation result on both sides. Accepted by the organisation |
 
 ### 6.2 Known limitations
 
 - **Docker POC.** All containers share one kernel, including those from both networks, so the POC must not handle real documents.
 - **Software boundary.** A firewall and DMZ are not equivalent to a hardware diode. This design is not suitable for accredited or classified use without review.
-- **Response appearance.** Flattening before signing makes responses image-based, with an OCR text layer. Recipients get a signed PDF, but not a text-native one.
+- **Response content.** DXG no longer flattens responses to images. The PKI service removes forms, annotations, actions and JavaScript before the seal, but text, fonts and images stay. Content hidden inside a page, and whatever metadata the PKI service keeps, leaves with the response.
 - **Fidelity.** Output is rasterized, so files can grow and lose formulas, links and text selection quality. OCR quality depends on the source and language.
 - **Spreadsheets.** Formulas and live data do not reach the internal network.
 - **Trust in the external side.** The internal side cannot revalidate the original signature. It trusts a report signed by `ext-app`.
 - **Release approvals.** `ext-release` accepts the approvals that `ext-app` recorded, so whoever controls `ext-app` can release a queued response without an officer. A separate confirmation on `ext-release` would close this. It was left out so that officers and approvers use one login.
+- **Shared PKI service.** One instance of the PKI service is reachable from both networks and reaches a cloud signature provider. This is an exception to rule 2 that the organisation accepts. DXG limits its own part: it sends that service only finished responses, and validates files from the internet on a separate instance.
 - **DLP.** Rule-based text scanning catches obvious leaks only. Malware could hide data inside a page image.
 - **Availability.** Every component is a single instance.
 - **Support.** No vendor support exists. Open-source licenses, including Dangerzone's AGPLv3, need legal review for your use.
@@ -1174,13 +1213,13 @@ Send application, host, firewall and proxy logs to a log store on each side. Int
 | Sequence gap | Received `seq` is not the expected value |
 | Verification failure | Any package signature, hash or schema failure |
 | PDF policy failure | Any failure, especially on the internal network |
-| Response signature failure | Append check or DSS failure on either side |
-| Signing queue age | Approved response not signed within the agreed time |
+| Response signature failure | The PKI service reports a response that fails the signature rule, on either side |
+| PKI service unavailable | A validation call fails or times out, on either side |
 | Queue age | Item or response older than its limit |
 | Missing ack | `ACK_TIMEOUT_MINUTES` exceeded |
 | Stale ClamAV data | Definitions older than 48 hours |
-| Stale trust list | DSS cache older than the configured limit |
-| Proxy denial spike | Unusual volume of denied DSS requests |
+| Stale trust list | `ext-validator` cache older than the configured limit |
+| Proxy denial spike | Unusual volume of denied requests from `ext-validator` |
 | Sanitizer anomaly | Timeouts, crash loops, unexpected tar entries |
 | Rejected drop | Any drop moved to `rejected/` |
 | Outtake age | Item older than `OUTTAKE_MAX_MINUTES` |
@@ -1193,11 +1232,10 @@ Send application, host, firewall and proxy logs to a log store on each side. Int
 | OS and package patches | Monthly, urgent fixes as needed | Infrastructure |
 | Dangerzone template update | With every upstream release | Security or infrastructure |
 | ClamAV definitions, moved by `ext-app` to `ext-sanitizer` | Daily | Automated |
-| `ext-sanitizer` and `int-sanitizer` restored from a snapshot | Daily | Automated |
+| `ext-sanitizer` restored from a snapshot | Daily | Automated |
 | Allowlist and policy review | Quarterly | Security |
 | Backup restore test | Quarterly | Infrastructure |
 | Certificate rollover | Before expiry | PKI owner |
-| `int-validator` trust-list snapshot | Within `TRUST_SNAPSHOT_MAX_DAYS` | PKI owner |
 | Access review | Quarterly | Service owner |
 
 ### 9.3 Backup
@@ -1213,13 +1251,14 @@ Back up both databases, the evidence store, configuration, and the audit hash ex
 | `ext-release` restarts during delivery | Undelivered outtake items are lost, and those releases move to `failed`. Results already written survive, so a delivered response is not sent twice | Officer retries the release |
 | `ext-sanitizer` unavailable | Jobs stay queued | Restore host, and jobs resume |
 | Flattening fails | Item rejected, with original kept in evidence | Ask the sender for another format |
-| DSS unavailable | Signed items stay queued | Restore DSS |
+| `ext-validator` unavailable | Signed items stay queued | Restore `ext-validator` |
+| PKI service unavailable | Responses wait, before packaging and before release | Automatic retry. Alert if it continues |
 | DMZ host unavailable | Packages stay on the sender | Rebuild DMZ host, and transfers resume |
 | `int-verifier` unavailable | Imports, acks and status packages wait on `dmz-import` | Restore the host, and collection resumes |
 | Package rejected | Package kept for analysis, and channel alert raised | Fix the cause, then resend with a new `package_id` and `seq` |
 | Sequence gap | Channel blocked | Operator checks both sides and accepts the gap, or resends |
 | Release send failure | Release moves to `failed` | Officer retries or chooses another channel |
-| Signed upload rejected | Response returns to the signer with the reason | Sign the approved PDF again with an incremental save |
+| Response rejected by `int-app` | The reason is written to the response folder | The composing application submits a corrected version |
 | Revocation data unavailable at release | Release waits and retries | Automatic. Alert if it continues |
 | Signature rule fails at release | Release blocked | Create a new signed version |
 | Response expires | Payload deleted on the external network, and `status` sent to the internal side | The internal side creates a new version if needed |
@@ -1256,12 +1295,12 @@ Keep hostile samples in a controlled store on the external network only.
 | ID | Scenario | Expected result |
 | --- | --- | --- |
 | T-20 | Valid qualified PAdES signature | `passed`, with evidence and report stored |
-| T-21 | Expired or revoked signer | `TOTAL_FAILED` or `INDETERMINATE`, as reported by DSS, and routed by section 3.3 |
+| T-21 | Expired or revoked signer | `TOTAL_FAILED` or `INDETERMINATE`, as reported by `ext-validator`, and routed by section 3.3 |
 | T-22 | Self-signed signature | Not trusted, and routed to review |
 | T-23 | PDF changed after signing | Rejected, and the strict policy is shown to change the outcome from the default policy |
 | T-24 | Incremental update and signature wrapping samples | Rejected or sent to review |
 | T-25 | Shadow attack samples | Rejected or sent to review |
-| T-26 | Multiple signatures | Worst result used, and the latest signature's revision extracted |
+| T-26 | Multiple signatures | Worst result used |
 | T-27 | Signed PDF with embedded attachment | Attachment does not reach the internal network |
 | T-28 | Signed PDF whose signature is in the first revision of the file | Whole file flattened, state `passed` |
 | T-46 | Signed PDF while the passthrough is disabled | Only the flattened copy and report reach the internal network |
@@ -1285,7 +1324,7 @@ Keep hostile samples in a controlled store on the external network only.
 | ID | Scenario | Expected result |
 | --- | --- | --- |
 | T-37 | Response for a closed request | Rejected |
-| T-38 | Author approves own response | Refused by the application and the database |
+| T-38 | Retired. Approval now happens in the composing application, as a signature | |
 | T-39 | A user tries to change a response on the external network | No function exists, and any file change fails hash checks |
 | T-40 | Same user creates and approves a release | Refused |
 | T-41 | Sensitive response without a second approver | Cannot be released |
@@ -1297,16 +1336,16 @@ Keep hostile samples in a controlled store on the external network only.
 
 | ID | Scenario | Expected result |
 | --- | --- | --- |
-| T-60 | Flattened PDF with a visible or invisible qualified signature, or a qualified seal, and a trusted timestamp | Passes all checks and is delivered byte for byte |
-| T-61 | Signed file rewritten by a tool that does not save incrementally | Rejected as not append-only |
-| T-62 | Upload with no signature | Rejected |
-| T-63 | Signed file with changed page content | Rejected |
+| T-60 | Response with the server seal, one or more qualified user signatures and qualified timestamps | Passes all checks and is delivered byte for byte |
+| T-61 | Response whose first signature is not the server seal, or with a user signature older than the seal | Rejected by `int-app` |
+| T-62 | Response with no user signature, or with no server seal | Rejected by `int-app` |
+| T-63 | Response changed after sealing or after signing | Rejected by `int-app` |
 | T-64 | Signature from an untrusted certificate | Blocked at release |
 | T-65 | Certificate revoked between signing and release | Blocked at release |
 | T-66 | Decrypted response sent to `ext-validator` | Not possible by configuration |
 | T-67 | Delivered file compared with the approved upload | Identical, and the signature validates in a PDF reader |
 | T-68 | Valid signature from a non-qualified certificate, or level `AdESig-QC` or `AdESeal-QC` | Blocked at release |
-| T-69 | Qualified signature with no timestamp, an invalid timestamp, or a timestamp before approval | Blocked at release |
+| T-69 | Qualified signature with no timestamp or an invalid timestamp | Blocked at release |
 
 ### 10.6 Infrastructure and performance tests
 
@@ -1314,7 +1353,7 @@ Keep hostile samples in a controlled store on the external network only.
 | --- | --- | --- |
 | T-50 | Connection attempts from the external to the internal network, and from the DMZ to either network | Blocked and logged |
 | T-51 | Outbound connection from `ext-sanitizer` | Blocked and logged |
-| T-52 | DSS asked to fetch an unlisted host from a crafted certificate URL | Denied by proxy and logged |
+| T-52 | `ext-validator` asked to fetch an unlisted host from a crafted certificate URL | Denied by proxy and logged |
 | T-53 | Restored backup | Application starts, and audit chain validates |
 | T-54 | Sanitizer restored during a job | Job retried, with no duplicate package |
 | T-55 | Typical documents, measured per page and per file | Baseline recorded for time and output size |
@@ -1322,6 +1361,8 @@ Keep hostile samples in a controlled store on the external network only.
 | T-57 | Connection from `int-verifier` to anything other than `dmz-import`, and from `dmz-import` to `int-core` | Blocked and logged |
 | T-59 | Connection to the external console from any address outside the wired campus network | Blocked and logged |
 | T-47 | Connection from an adapter host to `ext-core` or `ext-release` | Blocked and logged |
+| T-48 | Response drop with a wrong hash, an unknown application, a repeated reference or an extra file | Moved to `rejected/`, and the reason written to the result |
+| T-49 | A file from the internet sent to the shared PKI service, by `ext-app` or `ext-validator` | Not possible by configuration |
 
 ### 10.7 MVP acceptance criteria
 
@@ -1338,9 +1379,9 @@ Keep hostile samples in a controlled store on the external network only.
 | Phase | Build | Exit criteria |
 | --- | --- | --- |
 | 1. Import POC | Intake folder, `dxg-drop`, agent, screening, Dangerzone, basic console, DMZ transfer, `int-verifier` | T-01 to T-16, T-18, T-30 to T-36, T-45 and T-58 pass |
-| 2. Signed PDFs | DSS, strict policy, evidence store, reports, review flow | T-20 to T-28 and T-46 pass |
-| 3. Response path | Internal workflow, flattening, DLP rules, approvals, PDF signing upload, `int-validator`, package signing and encryption | T-37, T-38 and T-61 to T-63 pass |
-| 4. Release console | Queue, policy rules, second approval, `ext-release`, outtake folder | T-39 to T-44, T-60 and T-64 to T-69 pass |
+| 2. Signed PDFs | `ext-validator`, strict policy, evidence store, reports, review flow | T-20 to T-28 and T-46 pass |
+| 3. Response path | Response folder, signature checks through the PKI service, PDF policy, DLP rules, package signing and encryption | T-37, T-48 and T-61 to T-63 pass |
+| 4. Release console | Queue, policy rules, second approval, `ext-release`, outtake folder | T-39 to T-44, T-49, T-60 and T-64 to T-69 pass |
 | 5. Hardening | Move from Docker to VMs, add the mail adapter, monitoring, backups, access review, procedures, separate hardware | T-17, T-47, T-50 to T-57 and T-59 pass |
 | 6. MVP sign-off | Independent penetration test and fixes | Section 10.7 met |
 | Optional | Signed PDF passthrough, then return, only after an activation decision | Section 9 of the [passthrough design](document-exchange-signed-pdf-passthrough.md) met |
@@ -1353,6 +1394,8 @@ Phases 1 to 5 also answer these questions, which the design review left for the 
 | 1 | What does the allowlist for incoming PDFs look like? | The check is written from real Dangerzone output, and T-58 passes |
 | 1 | How much memory does OpenSSL need to decrypt and verify the largest package? | `MAX_PACKAGE_BYTES` and the host sizes in appendix E.1 are confirmed or changed |
 | 1 | Do the Compose networks behave as appendix E.8 says on the Linux POC host? | The console ports are reachable from the host only, and no DMZ container reaches a console |
+| 2 | What exactly does the eSign-API return from a validation call? Its API description leaves the response open | A recorded response shows the indication, level, format, scope and report, and the parser has a contract test |
+| 3 | Which metadata and hidden content survive the flattening that the PKI service does before the seal? | Checked on sample responses, and section 6.2 is confirmed or corrected |
 | 3 | Which DLP rules run on the extracted text, and is a tool such as Presidio worth adding? | The rules are written down and tested on sample responses |
 | 5 | Can a maintained mail fetcher and a standard mail relay replace a custom adapter? | One fetcher is chosen against the mailbox server's login method, and T-17 passes |
 
@@ -1396,7 +1439,7 @@ Every item in this section is open unless it is marked closed. Closed issues kee
 | Which trust anchors and CAs must be supported | PKI owner |
 | What counts as a sensitive response | Service owner |
 | Which recipients and domains need a second approver | Service owner |
-| How the signing tool reaches a trusted timestamp service from the internal network, and a remote seal service if the organisation's seal is not on a local device | PKI owner and network owner |
+| How the composing application attaches to the response folder: locally or through a spool (section 5.3) | Owner of the composing application |
 | Whether responses need `PAdES-BASELINE-LT` or `-LTA` for long-term validation | PKI owner and records owner |
 | Whether and when to activate the passthrough in section 3.6 (not needed for the POC) | Security owner and service owner |
 | Whether to accept that `ext-release` trusts the approvals recorded by `ext-app` (section 6.2) | Security owner |
@@ -1408,9 +1451,9 @@ A design review left these items open. Each open item needs a fix or a decision 
 
 High:
 
-1. **The append check covers only content streams** (appendix F.2). An update that replaces a page image or `/Resources` passes, and DSS does not see changes made in the signing update itself. This weakens SR-13.
+1. Closed. DXG no longer receives an unsigned version of a response, so there is no append check. The PKI service confirms that nothing changed after the seal (section 3.4).
 2. **The allowlist PDF check is not written.** `int-verifier` must accept only the structure that Dangerzone produces (appendix D.5, T-58), but `pdf_policy.py` is still a denylist (appendix F.1). Until the allowlist exists, a compromised external host could send a PDF with a hostile font or image and no forbidden key. Write the allowlist from real Dangerzone output in phase 1.
-3. **Timestamp access is unresolved** (section 3.4). The DMZ proxy is an exception to rule 2 in section 1.1, and the internal timestamp authority in section 6 of the [passthrough design](document-exchange-signed-pdf-passthrough.md) would not meet `REQUIRE_QUALIFIED_TIMESTAMP`. The "signed after approval" check also needs a reliable internal clock.
+3. Closed. The PKI service timestamps the seal and every signature (section 3.4).
 4. Closed. The mail adapter runs on its own host with a spool, `ext-app` collects from it and `ext-release` delivers to it (section 5.2).
 
 Medium:
@@ -1445,10 +1488,9 @@ These are starting values for the POC. The last column says where each setting i
 | `MAX_PACKAGE_BYTES` | 200 MiB | Sections 3.2 and 8.4 |
 | `MAX_RESPONSE_PAGES` | 100 | Section 3.4 |
 | `MAX_RESPONSE_BYTES` | 25 MiB | Section 3.4 |
-| `SIGNATURE_MAX_APPEND_BYTES` | 2 MiB | Section 3.4 |
+| `SIGNATURE_MAX_APPEND_BYTES` | 2 MiB | [Passthrough design](document-exchange-signed-pdf-passthrough.md) only |
 | `RESPONSE_SIGNATURE_LEVELS` | `QESig`, `QESeal` | Section 3.4 |
 | `REQUIRE_QUALIFIED_TIMESTAMP` | `true` | Section 3.4 |
-| `TRUST_SNAPSHOT_MAX_DAYS` | 7 | Appendix E.3 |
 | `ZIP_MAX_ENTRIES` | 200 | Section 7.4 |
 | `ZIP_MAX_TOTAL_BYTES` | 500 MiB | Section 7.4 |
 | `ZIP_MAX_RATIO` | 100 | Section 7.4 |
@@ -1497,7 +1539,7 @@ Example: [`examples/import-manifest.json`](examples/import-manifest.json).
 
 Example: [`examples/response-manifest.json`](examples/response-manifest.json).
 
-The signature fields are for display only, because `ext-response-validator` makes its own check at release. `base_sha256` and `base_bytes` describe the approved PDF. The external side has no copy of that PDF, so it hashes the first `base_bytes` of `signed.pdf` and compares the result.
+The signature fields are for display only, because `ext-release` makes its own check with the PKI service at release.
 
 ### C.4 Package scripts
 
@@ -1509,7 +1551,7 @@ The signature fields are for display only, because `ext-response-validator` make
 
 ### D.1 Sanitizer agent
 
-`ext-app` and `int-app` run the agent over SSH with a dedicated key. `authorized_keys` forces one command and disables everything else.
+`ext-app` runs the agent over SSH with a dedicated key. `authorized_keys` forces one command and disables everything else.
 
 ```text
 restrict,command="/usr/local/bin/dxg-agent" ssh-ed25519 AAAA... ext-app
@@ -1524,7 +1566,6 @@ The requested operation arrives through `SSH_ORIGINAL_COMMAND`, and the agent ac
 | `unpack-zip` | One ZIP file | Tar: `result.json`, `parts/NNNNNN.bin` |
 | `normalize-text` | One text file | UTF-8 text, or a JSON error |
 | `convert` | One file | Flattened PDF, exit status `0` on success |
-| `extract-text` (`int-sanitizer` only) | One PDF | UTF-8 text |
 | `update-definitions` (`ext-sanitizer` only) | Tar of ClamAV definition files | JSON: the versions loaded, or an error |
 
 `ext-app` downloads ClamAV definitions through `ext-egress` (F10) and sends them with `update-definitions` after each daily restore of the VM, and once a day. The agent checks the signature that ClamAV puts on each definition file before it loads it. `screen` fails when the loaded definitions are older than 48 hours.
@@ -1541,22 +1582,21 @@ dangerzone-cli - -o - --ocr-lang "$OCR_LANG" < input > output.pdf
 
 Dangerzone exits `1` when it cannot flatten a file. Treat that as a rejected item, and never fall back to the original file.
 
-### D.2 DSS REST calls
+### D.2 Validation calls
+
+`ext-app` validates incoming signed PDFs on `ext-validator`. `int-app` and `ext-release` validate responses on the PKI service. Both are the eSign-API, so the call is the same. Each caller sends its own API key.
 
 | Operation | Method and path |
 | --- | --- |
-| Validate a signature | `POST /services/rest/validation/validateSignature` |
-| Extract signed content | `POST /services/rest/validation/getOriginalDocuments` |
+| Validate the signatures of a PDF | `POST /validation/validate-signature` |
 
-[`scripts/dss-validation-request.sh`](scripts/dss-validation-request.sh) builds the request body for validation.
+The request body holds `signedDocument` and `policy`, each with `bytes` and `name`. [`scripts/dss-validation-request.sh`](scripts/dss-validation-request.sh) builds it.
 
-The response object contains `diagnosticData`, `simpleReport`, `detailedReport` and `validationReportDataHandler`. The last field carries the ETSI TS 119 102-2 report.
+The API description (version 2.3.1) does not define the response. Because the service builds on DSS, DXG expects the DSS reports: per signature an indication, sub-indication, signer, signing time, level, format and scope, and an ETSI TS 119 102-2 report. Record a real response in phase 2 and write the parser against it (section 11.1).
 
-Fields used from the simple report are `SignaturesCount`, `ValidSignaturesCount` and, per signature, `Indication`, `SubIndication`, `SignedBy`, `SigningTime`, `SignatureLevel` and `SignatureScope`.
+DXG does not use the signing calls of the API, or `compare-and-validate-signature`.
 
-For extraction, send the same `signedDocument` plus `signatureId`. **Always set `signatureId`.** If it is omitted, DSS uses the first signature in its list. Choose the signature whose byte range ends last, using the diagnostic data.
-
-The default DSS policy only warns about several PDF modification checks, so a tampered file could still reach `TOTAL_PASSED`. Build the strict policy from the `constraint.xml` shipped with your exact DSS version:
+The default DSS policy only warns about several PDF modification checks, so a tampered file could still reach `TOTAL_PASSED`. Build the strict policy from the `constraint.xml` of the DSS version inside the eSign-API, and send it with every call:
 
 ```bash
 sed -E 's#<(UndefinedChanges|PdfAnnotationOverlap|PdfVisualDifference|DocMDP|FieldMDP|SigFieldLock|ByteRangeCollision) Level="WARN"#<\1 Level="FAIL"#' \
@@ -1592,18 +1632,14 @@ Both consoles use the same conventions: session authentication, role checks on e
 
 | Method and path | Role | Purpose |
 | --- | --- | --- |
-| `GET /api/requests` | Author, auditor | List requests |
-| `GET /api/documents/{id}` | Author, auditor | Open a sanitized document |
-| `POST /api/requests/{id}/responses` | Author | Upload a draft response |
-| `POST /api/responses/{id}/submit` | Author | Submit for approval |
-| `POST /api/responses/{id}/approve` | Approver | Approve the flattened PDF for signing |
-| `POST /api/responses/{id}/refuse` | Approver | Refuse with a reason |
-| `GET /api/responses/{id}/base` | Signer | Download the approved PDF |
-| `POST /api/responses/{id}/signed` | Signer | Upload the signed PDF, run the checks and send |
-| `POST /api/responses/{id}/sensitivity` | Author | Mark or unmark a response as sensitive, until it is approved |
-| `POST /api/requests/{id}/close` | Author | Close a request |
+| `GET /api/requests` | Reader, auditor | List requests |
+| `GET /api/documents/{id}` | Reader, auditor | Open a sanitized document |
+| `GET /api/requests/{id}/responses` | Reader, auditor | List the responses of a request and their status |
+| `POST /api/requests/{id}/close` | Reader | Close a request |
 | `POST /api/channels/{direction}/accept-gap` | Administrator | Accept a sequence gap, with a reason |
 | `GET /api/audit` | Auditor | Read the audit log |
+
+Responses do not enter through this API. They arrive through the response folder (section 5.3).
 
 ### D.4 Release service
 
@@ -1616,11 +1652,10 @@ For each call, it:
 1. Loads the release from the database, reads the recorded approvals, and rechecks expiry and role rules.
 2. Decrypts the payload to `/dev/shm` and verifies the inner signature.
 3. Validates the manifest, and compares the file hash.
-4. Hashes the first `base_bytes` of the file, and compares the result with `base_sha256`.
-5. Runs `pdf_policy.py signed`, accepting exit `0` or `2`.
-6. Validates the file on `ext-response-validator`, with current revocation data, and applies the signature rule in section 3.4.
-7. Writes the file and `delivery.json` to the channel's outtake folder. For a channel on a spool, it then uploads the item to the spool and deletes its local copy.
-8. Writes the audit event, and deletes its own plaintext copy.
+4. Runs `pdf_policy.py signed`, accepting exit `0` or `2`.
+5. Validates the file with the PKI service (F12), with current revocation data, and applies the signature rule in section 3.4.
+6. Writes the file and `delivery.json` to the channel's outtake folder. For a channel on a spool, it then uploads the item to the spool and deletes its local copy.
+7. Writes the audit event, and deletes its own plaintext copy.
 
 A manual-channel file stays in the outtake folder until the officer downloads it. `ext-app` then asks `ext-release` for the file over the same call (F16) and passes it to the officer's browser without storing it. This is the one case in which a decrypted response passes through `ext-core`, and sensitive responses use this channel.
 
@@ -1663,14 +1698,14 @@ Rules:
 | Item | Choice |
 | --- | --- |
 | OS | Debian 13 or Ubuntu 24.04 LTS, both listed as supported by Dangerzone |
-| Deployment | POC: Docker Compose on one host, plus two sanitizer VMs. MVP: one VM per row of the sizing table below. No Kubernetes |
+| Deployment | POC: Docker Compose on one host, plus one sanitizer VM. MVP: one VM per row of the sizing table below. No Kubernetes |
 | Application | Laravel and Vue, in containers built from pinned images |
 | Database | PostgreSQL 16 or later, one instance per side |
 | Queue | PostgreSQL, using Laravel's database queue |
 | Agent | Python 3, with a virtual environment built from a hash-pinned lock file |
 | Secrets | Files readable by one service user, not committed and not in images |
 
-For the POC, start with 8 vCPU, 16 GiB RAM and 200 GiB disk for the Docker containers, and add the two sanitizer VMs from the table below. Suggested MVP sizing is below. Replace it with the flattening load measured during the POC.
+For the POC, start with 8 vCPU, 16 GiB RAM and 200 GiB disk for the Docker containers, and add the sanitizer VM from the table below. Suggested MVP sizing is below. Replace it with the flattening load measured during the POC.
 
 | Host | vCPU | RAM | Disk |
 | --- | --- | --- | --- |
@@ -1678,36 +1713,36 @@ For the POC, start with 8 vCPU, 16 GiB RAM and 200 GiB disk for the Docker conta
 | `ext-release` | 2 | 4 GiB | 40 GiB |
 | `ext-sanitizer` | 8 | 16 GiB | 100 GiB |
 | `ext-validator` | 2 | 4 GiB | 40 GiB |
-| `ext-response-validator` | 2 | 4 GiB | 40 GiB |
 | `ext-egress` | 1 | 1 GiB | 20 GiB |
 | `ext-mail-adapter` | 1 | 1 GiB | 20 GiB |
 | `dmz-import`, `dmz-export` | 1 each | 1 GiB each | 100 GiB each |
 | `int-core` | 4 | 8 GiB | 200 GiB |
 | `int-verifier` | 2 | 4 GiB | 100 GiB |
-| `int-sanitizer` | 4 | 8 GiB | 60 GiB |
-| `int-validator` | 2 | 4 GiB | 40 GiB |
 
 ### E.2 Dangerzone
 
 - Dangerzone runs in a VM in both the POC and the MVP.
-- Use `dangerzone-full`, which bundles the sandbox, on both sanitizer hosts. Neither host has internet access.
+- Use `dangerzone-full`, which bundles the sandbox, on `ext-sanitizer`. The host has no internet access.
 - Use version 0.11.1 or later. Advisory 2026-10-22 fixed two flaws in offline sandbox archive handling.
 - Update by building a new VM template in a maintenance network and replacing the host. Do not load sandbox archives that you did not prepare yourself.
 - Flatten a test document after every update, and compare the output against the PDF policy in appendix F.
 - Confirm in phase 1 that unattended runs work with no network, including any update check at startup.
 
-### E.3 DSS
+### E.3 Signature validation
 
-- For the POC, the `dss-demo-webapp` from the matching `dss-demonstrations` release exposes the required REST endpoints.
-- For the MVP, build a small service exposing only the two REST operations, instead of deploying a demonstration application.
-- Disable signing endpoints, server-side keystores, and anything else this project does not use.
-- Require mutual TLS from every caller. `ext-app`, `ext-release` and `int-app` each have their own client key (section 4.4).
-- Load EU trusted lists from the official list of trusted lists. Add national or private trust anchors only through a reviewed change.
+`ext-validator`, run by DXG:
+
+- Deploy the eSign-API with the validation calls only. Do not configure signing, cloud credentials or OAuth2 on this instance.
+- Accept calls only from `ext-app`, with its API key.
+- Load EU trusted lists from the official list of trusted lists, through `ext-egress`. Add national or private trust anchors only through a reviewed change.
 - Alert if the trust-list cache goes stale.
-- Run three separate instances: `ext-validator`, `ext-response-validator` and `int-validator`.
-- `int-validator` has no network route, so load a reviewed trust-list snapshot and any internal CA as trust anchors.
-- Qualified certificates and timestamps validate through the EU trusted lists, so `ext-response-validator` needs no private trust anchor for them.
-- Refresh the `int-validator` snapshot within `TRUST_SNAPSHOT_MAX_DAYS`, using the controlled maintenance process.
+- Never use the shared PKI service for a file that came from the internet (SR-18).
+
+The shared PKI service, run by the organisation:
+
+- `int-app` and `ext-release` call only `validate-signature`, each with its own API key.
+- Qualified certificates and timestamps validate through the EU trusted lists, so DXG needs no private trust anchor for responses.
+- DXG depends on it at two points: before a response is packaged and before it is released. When it is unavailable, responses wait.
 
 ### E.4 Egress proxy
 
@@ -1717,7 +1752,6 @@ Start with these destinations, and refine them during the POC:
 - `eur-lex.europa.eu` for the Official Journal reference
 - Hosts publishing the national trusted lists you rely on
 - OCSP, CRL and timestamp hosts of the CAs you expect to see
-- OCSP and CRL hosts of the provider that issues your signers' qualified certificates
 - `database.clamav.net` or your internal mirror, for `ext-core` only
 
 Log and deny everything else. A denied revocation host produces an `INDETERMINATE` result, which goes to operator review, and the allowlist is updated through a reviewed change.
@@ -1748,11 +1782,11 @@ Transfer rules:
 | Operator | External | Select items, review signature results, resend |
 | Release officer | External | Choose recipient and channel, complete a manual release |
 | Release approver | External | Give second approval |
-| Author | Internal | Read documents, draft and submit responses |
-| Approver | Internal | Approve or refuse a response |
-| Signer | Internal | Sign an approved response |
+| Reader | Internal | Read documents, see the status of responses, close a request |
 | Auditor | Both | Read requests and audit logs |
 | Administrator | Both | Manage configuration, without any release or approval right |
+
+Authors and signers of a response are users of the composing application and the PKI service, not of DXG.
 
 Serve both consoles over TLS only. Use MFA on every account on the external network. Use the existing directory on the internal network if it can be reached. Otherwise, use local accounts with MFA. One person must not hold both an officer and approver role.
 
@@ -1776,7 +1810,7 @@ Implementation rules for these permissions:
 
 ### E.8 POC deployment with Docker
 
-The POC runs 14 containers on one Docker host with Docker Compose. The two sanitizers run in separate VMs. The `dxg/*` images are built by this project. Section 4.2 explains which containers are grouped and which must stay separate.
+The POC runs 13 containers on one Docker host with Docker Compose. The sanitizer runs in a separate VM. One container, `pki-service`, stands in for the shared PKI service and joins a network on each side, as the real service does. The `dxg/*` images are built by this project. Section 4.2 explains which containers are grouped and which must stay separate.
 
 **Compose file:** [`poc/docker-compose.yml`](poc/docker-compose.yml). Its paths, such as `./folders` and `./secrets`, are relative to `poc/`, and `.gitignore` keeps both out of the repository.
 
@@ -1786,19 +1820,19 @@ The POC runs 14 containers on one Docker host with Docker Compose. The two sanit
 - `internal: true` gives a network no route out of Docker. Only `outside` has one, and only `ext-egress` joins it. It holds no keys.
 - No external container shares a network with an internal one. They can reach only the DMZ containers.
 
-**Connecting the sanitizer VMs:**
+**Connecting the sanitizer VM:**
 
-- `ext-sanitize` and `int-sanitize` use named Linux bridges, `br-ext-san` and `br-int-san`.
-- Run each VM under KVM on the Docker host, and attach its network card to that bridge with a static address in the subnet.
-- The VMs keep their SSH forced-command interface from appendix D.1, and they have no other network.
-- If the VMs run on another hypervisor, use a dedicated VLAN for each one instead.
+- `ext-sanitize` uses a named Linux bridge, `br-ext-san`.
+- Run the VM under KVM on the Docker host, and attach its network card to that bridge with a static address in the subnet.
+- The VM keeps its SSH forced-command interface from appendix D.1, and it has no other network.
+- If the VM runs on another hypervisor, use a dedicated VLAN instead.
 
 **POC rules:**
 
-- **Use test data only.** Dangerzone is isolated in a VM, but `ext-validator` and `int-app` still share one kernel on the Docker host. A DSS exploit from a hostile PDF could cross between the networks.
+- **Use test data only.** Dangerzone is isolated in a VM, but `ext-validator` and `int-app` still share one kernel on the Docker host. An exploit in `ext-validator` from a hostile PDF could cross between the networks.
 - **Docker networks do not enforce direction.** Containers on the same Docker network can reach each other's listening ports, whatever `ports:` publishes. The DMZ containers share networks with `ext-app` and `int-app`, so one could connect to a console. In the POC, each web application therefore listens only on its stack network, where only its reverse proxy reaches it. The proxy is the only container with a published port, and its second network does not forward traffic out. Confirm this in phase 1 by trying to connect from each DMZ container to both consoles. The MVP firewall enforces direction properly.
 - **Run PDF checks as a restricted subprocess** in `ext-app`, `ext-release`, `int-app` and `int-verifier`, so that these containers need no access to the Docker socket. The MVP uses a separate restricted container.
-- **Restore the sanitizer VMs daily** from a clean snapshot.
+- **Restore the sanitizer VM daily** from a clean snapshot.
 - **Use only the folders for files.** `dxg-drop` writes to `./folders/intake`, and released PDFs appear in `./folders/outtake/ready/`. The consoles handle decisions, not file transfer.
 - **Restrict `./folders/outtake`,** because it holds decrypted test responses.
 
@@ -1818,7 +1852,7 @@ The script runs the `qpdf` command and then pikepdf, which contains its own copy
 
 ### F.2 Signature append check
 
-Run on every signed response, with the approved PDF as the base. The passthrough (section 3.6) uses it with the signed original as the base.
+The POC and MVP do not use this check, because DXG never holds an unsigned version of a response. The [passthrough design](document-exchange-signed-pdf-passthrough.md) uses it, with the signed original as the base.
 
 Script: [`checks/signature_append_check.py`](checks/signature_append_check.py).
 
@@ -1830,10 +1864,10 @@ Script: [`checks/signature_append_check.py`](checks/signature_append_check.py).
 | Envelope schema | Tested against valid and invalid envelopes, including a `recipient` field. The ID and time patterns were added later and tested on their own, **not with a schema validator** |
 | Manifest, drop and delivery examples | Parsed as JSON only |
 | Docker Compose file | Checked with `docker compose config`, and its network graph was checked for isolation. **Not started**, because no Docker daemon or registry was available |
-| Sanitizer VMs attached to Docker bridges | **Not tested** |
+| Sanitizer VM attached to a Docker bridge | **Not tested** |
 | Folder setup script | Executed as root, and tested with intake, outtake and channel-separation scenarios, without the tmpfs mount |
 | Diagrams | Embedded as Mermaid blocks in this file. All blocks rendered without errors with mermaid-cli 11.4.2 |
-| SQL for both networks | Applied to PostgreSQL 16. The renamed statuses, the nullable internal `subject`, the unique `previous_hash` and the `reply_hint` and `channel_data` columns were added later and **not applied** |
+| SQL for both networks | Applied to PostgreSQL 16. The renamed statuses, the nullable internal `subject`, the unique `previous_hash`, the `reply_hint` and `channel_data` columns and the new internal `responses` table were added later and **not applied** |
 | `pdf_policy.py` | Executed against clean PDFs, real signed PDFs, and PDFs with JavaScript, links, attachments, launch actions and signature locks |
 | `signature_append_check.py` | Executed with visible, invisible, certified, second and timestamped signatures, and with altered, rewritten, unsigned, timestamp-only and oversized files |
 | nftables ruleset | Checked with `nft -c` |
@@ -1841,16 +1875,17 @@ Script: [`checks/signature_append_check.py`](checks/signature_append_check.py).
 | Reverse proxies and their networks in the Compose file | Checked with `docker compose config`, **not started** |
 | Strict DSS policy command | Executed against `constraint.xml` from DSS 6.5.1 |
 | Dangerzone CLI options and exit codes | Read from the 0.11.1 source and documentation, **not executed** |
-| DSS REST paths, fields and signed-revision behavior | Read from DSS 6.5.1 source, **not executed**, because the build dependencies could not be downloaded in the test environment |
+| eSign-API validation call | Read from its API description, version 2.3.1, **not executed**. The response format is not described there |
+| Response folder, and the checks on a finished response | Specified only, **not built** |
 | `sshd_config`, Squid guidance, tmpfs mount and host sizing | **Not tested** |
 | Adapters, adapter spools, the channel registry and the intake worker | Specified only, **not built** |
 | `int-verifier` and its commands | Specified only, **not built** |
 | `ext-release` on its own host, with flows F16 and F17 | Specified only, **not built** |
 | Signed PDFs from other signing software | **Not tested**. Test signatures came from one library only |
-| Response signature rule with real qualified certificates and timestamps | **Not tested**. Tests used private test certificates, and DSS was not executed |
+| Response signature rule with a real seal, user signatures and timestamps | **Not tested** |
 | `pdf_policy.py output` against real Dangerzone output | **Not tested** |
 
-Confirm these during phase 1 and phase 2. In particular, add a contract test that captures a real DSS JSON response for your exact version before writing the result parser.
+Confirm these during phase 1 and phase 2. In particular, add a contract test that captures a real eSign-API validation response before writing the result parser.
 
 ## References
 
