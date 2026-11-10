@@ -122,7 +122,7 @@ The columns are network zones, not machines. Each arrow points from the side tha
 
 ### 2.2 Request coming in
 
-An adapter drops each request into the intake folder. Untrusted files are opened only on `ext-sanitizer`. An operator chooses what to send, each chosen file is rebuilt as a flattened PDF, and the internal side collects the package.
+An adapter drops each request into the intake folder. Untrusted files are opened only on `ext-sanitizer`. An operator chooses what to send, each chosen file is flattened to PDF, and the internal side collects the package.
 
 Follow the numbers. Each box names the container or VM that does the work, and orange boxes with double side borders are VMs. Arrows show the order of work, not network connections: `ext-app` and `int-app` make every call, and the DMZ never connects to either network.
 
@@ -185,17 +185,17 @@ The same flow as calls between components, where each arrow points from the side
 
 ```mermaid
 sequenceDiagram
-    accDescr: Sequence of the import flow from the intake adapter to int-core
+    accDescr: Sequence of the import flow from the intake adapter to int-app
     %% Each arrow points from the side that opens the connection.
     %% Dashed arrows are replies on the same connection.
     autonumber
     participant A as Intake adapter
-    participant EC as ext-core
+    participant EC as ext-app
     participant ES as ext-sanitizer
     participant EV as ext-validator
     participant DI as dmz-import
     participant DE as dmz-export
-    participant IC as int-core
+    participant IC as int-app
 
     A->>EC: Complete drop in the intake folder
     Note over EC: Validate drop, store originals<br/>and SHA-256 in evidence
@@ -228,13 +228,13 @@ sequenceDiagram
 Steps in detail:
 
 1. **Intake.** An adapter places a complete drop in the intake folder (section 4.2). The intake worker validates it, stores the originals and their hashes in the evidence store, and removes the drop.
-2. **Parse.** For raw mail, `ext-sanitizer` parses the MIME structure. `ext-core` receives JSON metadata and raw parts and does no MIME parsing of its own.
+2. **Parse.** For raw mail, `ext-sanitizer` parses the MIME structure. `ext-app` receives JSON metadata and raw parts and does no MIME parsing of its own.
 3. **Screen.** Each attachment passes the checks in section 6. Rejected items keep their evidence record and reason.
 4. **Select.** The operator sees sender, subject, normalized body, file name, detected type, size and scan result. The console does not render attachments.
 5. **Validate.** Signed PDFs follow section 2.3.
-6. **Convert.** Selected items are converted, then checked by the PDF policy (appendix F) in a restricted container on `ext-core`.
-7. **Package.** `ext-core` builds the package from section 7 and uploads it to `dmz-import`.
-8. **Receive.** `int-core` verifies the package in the order in section 7.4, stores the documents and sends an `ack`.
+6. **Flatten.** Selected items are flattened, then checked by the PDF policy (appendix F) in a restricted container on `ext-core`.
+7. **Package.** `ext-app` builds the package from section 7 and uploads it to `dmz-import`.
+8. **Receive.** `int-app` verifies the package in the order in section 7.4, stores the documents and sends an `ack`.
 
 If the internal side reports a rejection, or no `ack` arrives within `ACK_TIMEOUT_MINUTES`, the request is flagged for an operator to resend.
 
@@ -363,12 +363,12 @@ sequenceDiagram
     actor AU as Internal author
     actor AP as Internal approver
     actor SI as Internal signer
-    participant IC as int-core
+    participant IC as int-app
     participant IS as int-sanitizer
     participant IV as int-validator
     participant DE as dmz-export
     participant DI as dmz-import
-    participant EC as ext-core
+    participant EC as ext-app
 
     AU->>IC: Upload draft for an open request
     IC->>IS: Flatten to PDF
@@ -398,7 +398,7 @@ Rules:
 - The author and approver must be different accounts. The signer may also be the approver.
 - A response may only be linked to a request that is open on the internal network.
 - The internal side can mark a response `sensitive`. It cannot supply a recipient, subject, body or header.
-- `ext-core` can verify the envelope without decrypting the payload, so the response stays encrypted until release.
+- `ext-app` can verify the envelope without decrypting the payload, so the response stays encrypted until release.
 
 Checks after signing:
 
@@ -468,7 +468,7 @@ stateDiagram-v2
     closed --> [*]
 ```
 
-When an officer starts a release, `release-svc` decrypts the response and runs the checks in appendix D.4. The response must meet the signature rule in section 2.4, and a failed check blocks the release.
+When an officer starts a release, `ext-release` decrypts the response and runs the checks in appendix D.4. The response must meet the signature rule in section 2.4, and a failed check blocks the release.
 
 Release rules:
 
@@ -581,12 +581,12 @@ The POC runs the two sanitizers in VMs and everything else in Docker containers 
 **`ext-app`** (in `ext-core`). External web app: operator and release console, intake worker, workflow and packaging. These share one container because they share code and trust level.
 - Software: Laravel, Vue, OpenSSL. Holds: `ext-package-sign`, the DSS client key, SFTP and agent keys, database credentials, the evidence store. Connections: F1 in; F3, F4, F7, F10 out.
 
-**`ext-release`** (in `ext-core`). `release-svc`: decrypts an approved response at release, runs the final checks (appendix D.4) and writes the file to the outtake folder.
+**`ext-release`** (in `ext-core`). The release service: decrypts an approved response at release, runs the final checks (appendix D.4) and writes the file to the outtake folder.
 - Holds: `ext-release-enc`, the release decryption key, as its only holder. Connections: F12 out. Reads the evidence store, writes only the outtake folder.
 
 **`ext-postgres`, `int-postgres`**. Database and job queue for each side, with the hash-chained audit log (appendix B). Laravel's database queue replaces Redis. Reachable only inside its stack.
 
-**`ext-sanitizer`** (VM). The only place untrusted files are opened: parses mail, detects type (Magika), scans (ClamAV), checks macros (oletools), unpacks ZIP files and converts to flattened PDF (Dangerzone).
+**`ext-sanitizer`** (VM). The only place untrusted files are opened: parses mail, detects type (Magika), scans (ClamAV), checks macros (oletools), unpacks ZIP files and flattens documents to PDF (Dangerzone).
 - Software: a Python agent behind an SSH forced command (appendix D.1); Dangerzone starts one sandbox per document. Holds: no keys or credentials. Connections: F3 in, nothing out. Restored from a clean snapshot daily, because it is the host most likely to be compromised.
 
 **`ext-validator`**. EU DSS for incoming signed PDFs: validates signatures and extracts the signed revision.
@@ -637,13 +637,13 @@ Confirm licenses again when pinning versions.
 
 | Key | Holder | Purpose |
 | --- | --- | --- |
-| `ext-package-sign` | `ext-core` | Sign imports, acks and status packages |
-| `int-import-enc` | `int-core` | Decrypt import payloads |
-| `int-package-sign` | `int-core` | Sign response packages and acks |
-| `ext-release-enc` | `release-svc` on `ext-core` | Decrypt responses at release |
-| `ext-dss-client` | `ext-core` | Authenticate to DSS |
-| `sftp-ext-*`, `sftp-int-*` | `ext-core`, `int-core` | Separate SSH keys per host and direction |
-| `agent-ext`, `agent-int` | `ext-core`, `int-core` | Run agent commands |
+| `ext-package-sign` | `ext-app` | Sign imports, acks and status packages |
+| `int-import-enc` | `int-app` | Decrypt import payloads |
+| `int-package-sign` | `int-app` | Sign response packages and acks |
+| `ext-release-enc` | `ext-release` | Decrypt responses at release |
+| `ext-dss-client` | `ext-app` | Authenticate to DSS |
+| `sftp-ext-*`, `sftp-int-*` | `ext-app`, `int-app` | Separate SSH keys per host and direction |
+| `agent-ext`, `agent-int` | `ext-app`, `int-app` | Run agent commands |
 
 Rules:
 
@@ -802,7 +802,7 @@ The adapter checks `expires_at` and the file hash, delivers the file, writes a r
 | FR-01 | Accept requests only through the intake folder, and store each original unchanged |
 | FR-02 | Reject executable, script and other disallowed content without operator action |
 | FR-03 | Let an operator choose which allowed items go to the internal network, using metadata only |
-| FR-04 | Convert selected documents to flattened PDF, and normalize text files |
+| FR-04 | Flatten selected documents to PDF, and normalize text files |
 | FR-05 | Unpack ZIP files within limits, and treat each file as a separate item |
 | FR-06 | Validate digitally signed PDFs before sanitization, and keep the original as evidence |
 | FR-07 | Give the internal side a sanitized copy, a signature status and an ETSI validation report |
@@ -847,7 +847,7 @@ The adapter checks `expires_at` and the file hash, delivers the file, writes a r
 | Compromised `ext-sanitizer` | No keys or credentials, output treated as untrusted, restricted PDF check on the external side, full verification on the internal side | A forged but well-formed PDF with false visible content |
 | Compromised `ext-core` | Encrypted responses, the internal side verifies every import and re-checks every PDF | Attacker can read the mailbox, evidence and queued imports, and can sign packages until the key is revoked |
 | Compromised DMZ host | Encryption, signatures, sequence numbers | Denial of service, and exposure of envelope metadata |
-| Forged validation report | Package signature, signing key held only on `ext-core` | The internal side trusts the external validator result, so `ext-core` compromise affects it |
+| Forged validation report | Package signature, signing key held only by `ext-app` | The internal side trusts the external validator result, so `ext-core` compromise affects it |
 | Malware on the internal network leaking data | Response needs an open request, approval, DLP, size limits, flattening before signing, append check, no recipient control | Data hidden in page images cannot be reliably detected |
 | Compromised internal system sets a recipient | Schema has no recipient field, and the external side chooses the recipient | None for address selection |
 | Compromised external workstation | Server-side send, MFA, second approver | Workstation can mislead its own user, and manual downloads expose plaintext |
@@ -880,7 +880,7 @@ The default limits for this section are in appendix A.
 - HTML, SVG, XML, LNK, ISO and other disk images
 - CSV, because of formula injection, until a value-only import exists
 - RAR, 7z and other archives
-- Password-protected or malformed files, including anything Dangerzone cannot convert
+- Password-protected or malformed files, including anything Dangerzone cannot flatten
 - Any file whose detected type and extension do not agree
 
 Screening stops at the first failure and records the reason:
@@ -997,7 +997,7 @@ Send application, host, firewall and proxy logs to a log store on each side. Int
 | --- | --- | --- |
 | OS and package patches | Monthly, urgent fixes as needed | Infrastructure |
 | Dangerzone template update | With every upstream release | Security or infrastructure |
-| ClamAV definitions, moved by `ext-core` to `ext-sanitizer` | Daily | Automated |
+| ClamAV definitions, moved by `ext-app` to `ext-sanitizer` | Daily | Automated |
 | `ext-sanitizer` restored from a snapshot | Daily | Automated |
 | Allowlist and policy review | Quarterly | Security |
 | Backup restore test | Quarterly | Infrastructure |
@@ -1017,7 +1017,7 @@ Back up both databases, the evidence store, configuration, and the audit hash ex
 | Folder adapter or mail adapter stopped | Drops or outtake items wait, and an alert is raised | Restart the adapter |
 | `ext-core` restarts during delivery | Outtake contents are lost, and the release moves to `failed` | Officer retries the release |
 | `ext-sanitizer` unavailable | Jobs stay queued | Restore host, and jobs resume |
-| Conversion fails | Item rejected, with original kept in evidence | Ask the sender for another format |
+| Flattening fails | Item rejected, with original kept in evidence | Ask the sender for another format |
 | DSS unavailable | Signed items stay queued | Restore DSS |
 | DMZ host unavailable | Packages stay on the sender | Rebuild DMZ host, and transfers resume |
 | Package rejected | Package kept for analysis, and channel alert raised | Fix the cause, then resend with a new `package_id` and `seq` |
@@ -1044,7 +1044,7 @@ Keep hostile samples in a controlled store on the external network only.
 | T-06 | Password-protected ZIP, Word file and PDF | Rejected |
 | T-07 | ZIP bomb and deep nesting | Rejected at a limit, with no host impact |
 | T-08 | ZIP with `../` paths and symlinks | Rejected, with nothing written outside the job area |
-| T-09 | Malformed Office and PDF files | Conversion fails safely |
+| T-09 | Malformed Office and PDF files | Flattening fails safely |
 | T-10 | Long or Unicode-tricked file names | Display name normalized, and file stored under a generated name |
 | T-11 | HTML-only `.eml` sample with tracking images | Text extracted, with no remote fetch |
 | T-12 | Incomplete drop left in `.incoming` | Ignored by the pipeline |
@@ -1140,7 +1140,7 @@ Keep hostile samples in a controlled store on the external network only.
 - **Response appearance.** Flattening before signing makes responses image-based, with an OCR text layer. Recipients get a signed PDF, but not a text-native one.
 - **Fidelity.** Output is rasterized, so files can grow and lose formulas, links and text selection quality. OCR quality depends on the source and language.
 - **Spreadsheets.** Formulas and live data do not reach the internal network.
-- **Trust in the external side.** The internal side cannot revalidate the original signature. It trusts a report signed by `ext-core`.
+- **Trust in the external side.** The internal side cannot revalidate the original signature. It trusts a report signed by `ext-app`.
 - **DLP.** Rule-based text scanning catches obvious leaks only. Malware could hide data inside a page image.
 - **Availability.** Every component is a single instance.
 - **Support.** No vendor support exists. Open-source licenses, including Dangerzone's AGPLv3, need legal review for your use.
@@ -1221,7 +1221,7 @@ By default, an incoming signed PDF reaches the internal network as a flattened c
 
 Each network reads its own settings, and a side with a setting off rejects that traffic. Both sides must be on for the feature to work. Settings change only through a reviewed configuration change, are recorded in the audit log, and have no switch in the consoles.
 
-A new signature on a PDF is appended to the existing file, so this cannot work on a flattened copy. Any rebuild also invalidates the earlier signatures, whichever sanitization product is used.
+A new signature on a PDF is appended to the existing file, so this cannot work on a flattened copy. Any flattening also invalidates the earlier signatures, whichever sanitization product is used.
 
 ### 12.2 Risk
 
@@ -1295,7 +1295,7 @@ Internal side, before approval:
 
 External side, at release:
 
-6. `release-svc` repeats `signature_append_check.py`, using the original from the evidence store. This does not depend on anything the internal network sends.
+6. `ext-release` repeats `signature_append_check.py`, using the original from the evidence store. This does not depend on anything the internal network sends.
 7. `ext-response-validator` validates the file with current revocation data, and the internally added signature must meet the rule in section 2.4.
 8. The file is delivered byte for byte. Any correction is a new version from the internal side.
 
@@ -1436,7 +1436,7 @@ JSON Schema for the envelope: [`schemas/envelope.schema.json`](schemas/envelope.
 
 Example: [`examples/import-manifest.json`](examples/import-manifest.json).
 
-`signature.state` is one of `none`, `passed` or `review_accepted`. `int-core` keeps the ETSI report as an opaque file and displays values from the signed manifest, so the internal side does not need a rich XML viewer.
+`signature.state` is one of `none`, `passed` or `review_accepted`. `int-app` keeps the ETSI report as an opaque file and displays values from the signed manifest, so the internal side does not need a rich XML viewer.
 
 ### C.3 Response manifest example
 
@@ -1454,10 +1454,10 @@ The signature fields are for display only, because `ext-response-validator` make
 
 ### D.1 Sanitizer agent
 
-`ext-core` and `int-core` run the agent over SSH with a dedicated key. `authorized_keys` forces one command and disables everything else.
+`ext-app` and `int-app` run the agent over SSH with a dedicated key. `authorized_keys` forces one command and disables everything else.
 
 ```text
-restrict,command="/usr/local/bin/dxg-agent" ssh-ed25519 AAAA... ext-core
+restrict,command="/usr/local/bin/dxg-agent" ssh-ed25519 AAAA... ext-app
 ```
 
 The requested operation arrives through `SSH_ORIGINAL_COMMAND`, and the agent accepts only these exact forms. Input arrives on stdin and output leaves on stdout.
@@ -1473,7 +1473,7 @@ The requested operation arrives through `SSH_ORIGINAL_COMMAND`, and the agent ac
 
 Limits for every command are set in the systemd unit or wrapper: `RuntimeMaxSec`, `MemoryMax`, and a maximum stdin size.
 
-Tar output from an agent is treated as hostile. `ext-core` reads it with its own loop, accepts regular files only, and requires names to match `^(result\.json|parts/[0-9]{6}\.bin)$`.
+Tar output from an agent is treated as hostile. `ext-app` reads it with its own loop, accepts regular files only, and requires names to match `^(result\.json|parts/[0-9]{6}\.bin)$`.
 
 `convert` runs the following, with a timeout from configuration:
 
@@ -1481,7 +1481,7 @@ Tar output from an agent is treated as hostile. `ext-core` reads it with its own
 dangerzone-cli - -o - --ocr-lang "$OCR_LANG" < input > output.pdf
 ```
 
-Dangerzone exits `1` on any failed conversion. Treat that as a rejected item, and never fall back to the original file.
+Dangerzone exits `1` when it cannot flatten a file. Treat that as a rejected item, and never fall back to the original file.
 
 ### D.2 DSS REST calls
 
@@ -1543,7 +1543,7 @@ Both consoles use the same conventions: session authentication, role checks on e
 
 ### D.4 Release service
 
-`release-svc` is a small process on `ext-core`, running as its own user, and it is the only process that can read the release decryption key. It listens on a Unix socket and takes one argument, a release ID.
+`ext-release` is a small process on `ext-core`, running as its own user, and it is the only process that can read the release decryption key. It listens on a Unix socket and takes one argument, a release ID.
 
 For each call, it:
 
@@ -1572,7 +1572,7 @@ The adapter's result in `outtake/results/` completes the release.
 | Agent | Python 3, with a virtual environment built from a hash-pinned lock file |
 | Secrets | Files readable by one service user, not committed and not in images |
 
-For the POC, start with 8 vCPU, 16 GiB RAM and 200 GiB disk for the Docker containers, and add the two sanitizer VMs from the table below. Suggested MVP sizing is below. Replace it with conversion load measured during the POC.
+For the POC, start with 8 vCPU, 16 GiB RAM and 200 GiB disk for the Docker containers, and add the two sanitizer VMs from the table below. Suggested MVP sizing is below. Replace it with the flattening load measured during the POC.
 
 | Host | vCPU | RAM | Disk |
 | --- | --- | --- | --- |
@@ -1592,7 +1592,7 @@ For the POC, start with 8 vCPU, 16 GiB RAM and 200 GiB disk for the Docker conta
 - Use `dangerzone-full`, which bundles the sandbox, on both sanitizer hosts. Neither host has internet access.
 - Use version 0.11.1 or later. Advisory 2026-10-22 fixed two flaws in offline sandbox archive handling.
 - Update by building a new VM template in a maintenance network and replacing the host. Do not load sandbox archives that you did not prepare yourself.
-- Run a test conversion after every update, and compare the output against the PDF policy in appendix F.
+- Flatten a test document after every update, and compare the output against the PDF policy in appendix F.
 - Confirm in phase 1 that unattended runs work with no network, including any update check at startup.
 
 ### E.3 DSS

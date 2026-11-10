@@ -9,8 +9,8 @@ CREATE TABLE requests (
     evidence_path   text NOT NULL,
     status          text NOT NULL CHECK (status IN (
                         'received', 'screening', 'awaiting_selection',
-                        'processing', 'awaiting_review', 'queued_for_b',
-                        'delivered_to_b', 'response_ready', 'closed',
+                        'processing', 'awaiting_review', 'queued_for_internal',
+                        'delivered_to_internal', 'response_ready', 'closed',
                         'rejected', 'failed')),
     received_at     timestamptz NOT NULL,
     UNIQUE (source_adapter, source_reference)
