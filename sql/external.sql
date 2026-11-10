@@ -32,7 +32,7 @@ CREATE TABLE items (
     passthrough     boolean NOT NULL DEFAULT false,
     status          text NOT NULL CHECK (status IN (
                         'screened', 'rejected', 'selected', 'not_selected',
-                        'validating', 'awaiting_review', 'converting',
+                        'validating', 'awaiting_review', 'flattening',
                         'ready', 'failed')),
     reject_reason   text,
     selected_by     text

@@ -12,16 +12,16 @@ services:
     <<: *app
     image: dxg/ext-app:poc
     ports: ["127.0.0.1:8080:8080"]
-    networks: [ext-core, ext-sanitize, ext-validate, ext-updates, ext-to-import, ext-to-export]
+    networks: [ext-core, ext-sanitize, ext-validate, ext-updates, ext-release-call, ext-to-import, ext-to-export]
     volumes:
       - ./folders/intake:/srv/dxg/intake
       - ext-evidence:/srv/dxg/evidence
-    secrets: [ext_package_sign, ext_db_password, ext_dss_client, sftp_ext_import, sftp_ext_export, agent_ext, release_ext]
+    secrets: [ext_package_sign, ext_db_password, ext_dss_client, ext_console_tls, sftp_ext_import, sftp_ext_export, agent_ext, release_ext]
 
   ext-release:
     <<: *app
     image: dxg/ext-release:poc
-    networks: [ext-core, ext-check]
+    networks: [ext-release-call, ext-release-db, ext-check]
     volumes:
       - ./folders/outtake:/srv/dxg/outtake
     secrets: [ext_release_enc, ext_release_db_password, ext_release_dss_client]
@@ -29,7 +29,7 @@ services:
   ext-postgres:
     image: postgres:16
     restart: unless-stopped
-    networks: [ext-core]
+    networks: [ext-core, ext-release-db]
     environment:
       POSTGRES_PASSWORD_FILE: /run/secrets/ext_db_password
     volumes: [ext-db:/var/lib/postgresql/data]
@@ -68,7 +68,7 @@ services:
     ports: ["127.0.0.1:8081:8080"]
     networks: [int-core, int-sanitize, int-validate, int-verify, int-to-export]
     volumes: [int-documents:/srv/dxg/documents]
-    secrets: [int_package_sign, int_db_password, int_dss_client, sftp_int_export, agent_int, verifier_int]
+    secrets: [int_package_sign, int_db_password, int_dss_client, int_console_tls, sftp_int_export, agent_int, verifier_int]
 
   int-verifier:
     <<: *app
@@ -95,6 +95,8 @@ networks:
   ext-core: { internal: true }
   ext-validate: { internal: true }
   ext-check: { internal: true }
+  ext-release-call: { internal: true }
+  ext-release-db: { internal: true }
   ext-updates: { internal: true }
   ext-trust-incoming: { internal: true }
   ext-trust-responses: { internal: true }
@@ -132,6 +134,7 @@ secrets:
   ext_db_password: { file: ./secrets/ext-db-password }
   ext_release_db_password: { file: ./secrets/ext-release-db-password }
   ext_dss_client: { file: ./secrets/ext-dss-client.pem }
+  ext_console_tls: { file: ./secrets/ext-console-tls.pem }
   ext_release_dss_client: { file: ./secrets/ext-release-dss-client.pem }
   sftp_ext_import: { file: ./secrets/sftp-ext-import }
   sftp_ext_export: { file: ./secrets/sftp-ext-export }
@@ -141,6 +144,7 @@ secrets:
   int_import_enc: { file: ./secrets/int-import-enc.pem }
   int_db_password: { file: ./secrets/int-db-password }
   int_dss_client: { file: ./secrets/int-dss-client.pem }
+  int_console_tls: { file: ./secrets/int-console-tls.pem }
   sftp_int_export: { file: ./secrets/sftp-int-export }
   agent_int: { file: ./secrets/agent-int }
   sftp_int_import: { file: ./secrets/sftp-int-import }

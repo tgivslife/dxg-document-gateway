@@ -8,7 +8,7 @@ We ask the security team for eight decisions, listed at the end of this proposal
 
 ## The need
 
-Requests arrive by email at a mailbox on the internet-connected network, called the external network here. They carry Word, Excel, PDF, text, image and ZIP attachments, and some PDFs are digitally signed. Staff on the internal network (the internal network) need some of these documents, and they answer each request with a signed response.
+Requests arrive by email at a mailbox on the internet-connected network, called the external network here. They carry Word, Excel, PDF, text, image and ZIP attachments, and some PDFs are digitally signed. Staff on the internal network (the intranet) need some of these documents, and they answer each request with a signed response.
 
 The solution must:
 
@@ -30,7 +30,7 @@ flowchart TB
     accDescr: DXG parts by network zone. Arrows point from the side that opens the connection, and both networks connect out to the DMZ.
 
     subgraph INT["Internal network"]
-        IAPP["<b>int-app</b><br/>Documents, drafting,<br/>approval and signing.<br/>Holds the response signing key."]
+        IAPP["<b>int-app</b><br/>Documents, drafting,<br/>approval and signing.<br/>Holds the key that signs<br/>response packages."]
         IVER["<b>int-verifier</b><br/>Collects, decrypts and<br/>checks incoming packages.<br/>No console, no database."]
         ISAN[["<b>int-sanitizer VM</b><br/>Flattens response drafts,<br/>extracts text for DLP"]]
         IVAL["<b>int-validator</b><br/>Checks signed responses<br/>offline, no network"]
@@ -86,13 +86,13 @@ flowchart TB
     style INT fill:#ebf5ec,stroke:#7fbf8a
 ```
 
-The core servers are the two application servers: ext-app on the external network and int-app on the internal network. ext-release, which decrypts a response at release, runs on its own server. Each core server talks only to its own isolated helpers and to the DMZ. On the internal network, a separate verifier collects what arrives from the DMZ, so the server that holds the internal documents never parses a package itself. Nothing on the external side or in the DMZ can open a connection to the internal network.
+The core servers are the two application servers: ext-app on the external network and int-app on the internal network. ext-release, which decrypts a response at release, runs on its own server. Each core server talks only to its own isolated helpers and to the DMZ. ext-app also reaches the release server and the mail adapter's server. On the internal network, a separate verifier collects what arrives from the DMZ, so the server that holds the internal documents never parses a package itself. Nothing on the external side or in the DMZ can open a connection to the internal network.
 
 **Incoming request, external network to internal network**
 
 1. The email arrives, and the original is stored unchanged as evidence on the external network.
 2. In an isolated virtual machine, each attachment's real type is detected, it is scanned for malware and checked for macros. Disallowed files are rejected automatically.
-3. An operator sees only metadata: sender, subject, file names, types and scan results. The operator selects the files the internal network needs. Nobody opens an attachment on the external network.
+3. An operator sees only the message text and metadata: sender, subject, file names, types and scan results. The operator selects the files the internal network needs. Nobody opens an attachment on the external network.
 4. A signed PDF has its signature validated first, and the validation report travels with it.
 5. Each selected file is rebuilt as a flattened PDF: rendered to pixels in a sandbox, then turned back into a PDF with an OCR text layer. Text files are normalized instead.
 6. The documents are packed, signed, encrypted and left on the import server. On the internal network, the verifier collects the package, verifies and decrypts it and checks every PDF again. Only then does the core server store the documents.
@@ -132,12 +132,12 @@ Each part does one job, and the parts that open untrusted files hold no keys and
 | ext-release | External, own server | Decrypts an approved response at release and hands it to the outgoing channel. Only holder of the release decryption key and of the outtake folder, so decrypted responses never sit on the ext-app server. | Small service, OpenSSL |
 | ext-sanitizer | External, isolated VM | The only place untrusted files are opened: parses email, detects file types, scans, checks macros, unpacks ZIPs and flattens documents to PDF. No keys, no outbound network, reset daily. | Python agent, Magika, ClamAV, oletools, Dangerzone |
 | ext-validator | External, isolated | Validates signatures on incoming signed PDFs against the EU trusted lists. | EU DSS |
-| ext-response-validator | External, isolated | Checks the qualified signature and timestamp of each response at release. Never sees files from the internet. | EU DSS |
+| ext-response-validator | External, isolated | Checks the qualified signature or seal and the timestamp of each response at release. Never sees files from the internet. | EU DSS |
 | ext-egress | External | The validators' only way out. Allows trust lists, revocation checks, timestamps and antivirus updates, and denies everything else. | Squid proxy |
 | ext-mail-adapter (MVP) | External, own server | Fetches mail and sends released responses. No keys and no database access. ext-app collects requests from it and ext-release delivers responses to it, so it never connects to them. | IMAP and SMTP client |
 | dmz-import, dmz-export | DMZ | One transfer server per direction. Holds only signed, encrypted packages until the other side collects them. | OpenSSH in file-transfer-only mode, nftables firewall |
-| int-verifier | Internal, isolated | The only internal part that connects to dmz-import. Collects packages, verifies and decrypts them, and checks every PDF before int-app sees it. Holds the import decryption key. No console, no database, no response signing key. | Small agent, OpenSSL, PDF checks |
-| int-app | Internal | Console for internal users. Stores verified documents, runs drafting, approval, signing upload and DLP checks, and builds response packages. Holds the response signing key. | Laravel and Vue web app, OpenSSL |
+| int-verifier | Internal, isolated | The only internal part that connects to dmz-import. Collects packages, verifies and decrypts them, and checks every PDF before int-app sees it. Holds the import decryption key. No console, no database, and no key that signs response packages. | Small agent, OpenSSL, PDF checks |
+| int-app | Internal | Console for internal users. Stores verified documents, runs drafting, approval, signing upload and DLP checks, and builds response packages. Holds the key that signs response packages. | Laravel and Vue web app, OpenSSL |
 | int-sanitizer | Internal, isolated VM | Flattens response drafts and extracts their text for DLP checks. | Python agent, Dangerzone |
 | int-validator | Internal, isolated | Checks signed responses early, offline, with a reviewed copy of the trust lists. | EU DSS |
 | Databases | Each side | Requests, decisions, job queue and the audit log. One per network, never shared. | PostgreSQL |
@@ -175,7 +175,7 @@ The cost is fidelity. Flattened PDFs keep a document's look but lose formulas, l
 
 ## Remaining risks and known gaps
 
-Five risks remain by design. A design review also found a number of open issues. The four most serious are listed here and must be closed before the proof of concept. The [technical design](document-exchange-mvp-technical-documentation.md) lists all of them in section 12.2.
+Five risks remain by design. A design review also found a number of open issues. The four most serious are listed here. One is settled, and the other three must be closed before or during the proof of concept. The [technical design](document-exchange-mvp-technical-documentation.md) lists all of them in section 12.2.
 
 | Remaining risk | What limits it |
 | --- | --- |
@@ -183,14 +183,14 @@ Five risks remain by design. A design review also found a number of open issues.
 | A software boundary, not a hardware data diode | Not proposed for classified networks without review. A hardware diode can replace the DMZ transfer later without changing the package format. |
 | The internal network trusts signature checks made on the external side | The validation report is signed into the package, and the original stays in the evidence store. |
 | Data hidden in page images on the way out | DLP reads text only. Flattening, size limits, a second approver and no recipient control on the internal network reduce the channel. |
-| A compromised external core server | It can read the mailbox and queued imports. It can also record false approvals, and so release a waiting response to a recipient of its choice. It cannot change a response, and it cannot read the release key or a decrypted response, which sit on a separate server. The console is reachable only from the wired campus network, the internal network verifies every package, and the signing key can be revoked. |
+| A compromised external core server | It can read every collected request and queued import. It can also record false approvals, and so release a waiting response to a recipient of its choice. It cannot change a response, and it cannot read the release key or a decrypted response, which sit on a separate server. The console is reachable only from the wired campus network, the internal network verifies every package, and the signing key can be revoked. |
 
 | Known gap | Proposed fix |
 | --- | --- |
 | The check that only a signature was added compares page drawing commands. A flattened page draws an image stored elsewhere, so that image could be swapped during signing. | Compare the rendered pages, or allow the signing step to add signature objects only. |
 | The internal network checks incoming PDFs against a list of forbidden features. A hostile font or image could pass if the external side were compromised. | The verifier will accept only the exact structure Dangerzone produces. This check is written in phase 1, from real Dangerzone output. |
 | Signers on the internal network need a trusted timestamp, but the internal network has no route out. | A security decision, listed below. |
-| Where the MVP mail adapter runs was not settled, and it reaches the internet. | Settled. It runs on its own server, which cannot connect to the core servers. They collect from it and deliver to it. |
+| Where the MVP mail adapter runs was not settled, and it reaches the internet. | Settled. It runs on its own server, which cannot connect to ext-app or ext-release. ext-app collects from it and ext-release delivers to it. |
 
 ## Plan
 

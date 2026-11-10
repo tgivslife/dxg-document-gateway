@@ -99,7 +99,7 @@ Internal side, before approval:
 External side, at release:
 
 6. `ext-release` repeats `signature_append_check.py`, using the original from the evidence store. `ext-app` hands the original over with the release call, because `ext-release` runs on its own host. This does not depend on anything the internal network sends.
-7. `ext-response-validator` validates the file with current revocation data, and the internally added signature must meet the rule in section 3.4 of the [technical design](document-exchange-mvp-technical-documentation.md).
+7. `ext-response-validator` validates the file with current revocation data, and the internally added signature must meet the rule in section 3.4 of the [technical design](document-exchange-mvp-technical-documentation.md). One row of that rule cannot apply as written: "signed after approval". Here the signature is added before the approval in step 5. What replaces that row must be decided before activation.
 8. The file is delivered byte for byte. Any correction is a new version from the internal side.
 
 The internal network has no route to a public timestamp service. If long-term validation is required, use an internal timestamp authority. Anything added on the external side would need these checks to run again, and is not part of this design.
@@ -110,7 +110,8 @@ These checks limit the leak path, but they cannot prove the appended data is cle
 
 | Item | Purpose |
 | --- | --- |
-| Restricted original storage on `int-core` | Readable only by the signing tool and the check service |
+| Restricted original storage on `int-core` | Readable only by the signing tool and by `int-app` when it runs the return checks |
+| `int-verifier` | Must accept `originals/` when the feature is on. An original does not have the structure Dangerzone produces, so the verifier checks it with `pdf_policy.py signed` and not with the allowlist |
 | Signing tool | Section 5. It must open the original, which the MVP signing flow does not allow |
 
 The import manifest gains these fields for each eligible document:
