@@ -7,14 +7,14 @@
   "sha256": "6666666666666666666666666666666666666666666666666666666666666666",
   "bytes": 214880,
   "sealed_by": "Example Organisation",
-  "seal_level": "QESeal",
+  "seal_level": "QESEAL",
   "signers": [
     {
       "signed_by": "Example Signer",
-      "level": "QESig",
-      "format": "PAdES-BASELINE-T",
+      "level": "QESIG",
+      "format": "PAdES_BASELINE_LT",
       "timestamp_time": "2026-11-04T11:05:31Z"
     }
   ],
-  "report": "reports/signature.etsi.xml"
+  "report": "reports/signature.validation.json"
 }

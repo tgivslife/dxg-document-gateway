@@ -4,7 +4,7 @@ Teodor Ion · 4 November 2026
 
 ## What we ask
 
-We ask the security team for eight decisions, listed at the end of this proposal. The last one is approval to start a proof of concept on one isolated host, with test data only.
+We ask the security team for seven decisions, listed at the end of this proposal. The last one is approval to start a proof of concept on one isolated host, with test data only.
 
 ## The need
 
@@ -61,7 +61,7 @@ flowchart TB
     IVER --> IMP
     IAPP --> IVER
     IAPP --> EXP
-    COMPOSE -. "response folder" .- IAPP
+    IAPP -->|"collects responses"| COMPOSE
     COMPOSE --> PKI
     IAPP --> PKI
     CORE --> IMP
@@ -105,7 +105,7 @@ The core servers are the two application servers: ext-app on the external networ
 **Outgoing response, internal network to external network**
 
 1. Users write the response in the existing composing application. The PKI service applies the organisation's qualified seal and a timestamp, and then one or more users sign. In the organisation's process, a signature is the approval.
-2. The composing application hands the finished PDF to DXG for an open request.
+2. DXG collects the finished PDF from the composing application, for an open request.
 3. DXG asks the PKI service to check the seal, the signatures and the timestamps, checks that the PDF has no active content, and runs data loss prevention (DLP) rules on its text.
 4. The response is packed, signed, encrypted and left on the export server. The external network collects it and keeps it encrypted.
 5. A release officer chooses the recipient and channel. A sensitive response always needs a second approver, and so does a recipient in a domain that the service owner lists. Any recipient other than the suggested one needs a written reason. The PKI service checks the signatures once more, and the file leaves byte for byte as signed.
@@ -143,7 +143,7 @@ Each part does one job, and the parts that open untrusted files hold no keys and
 | int-verifier | Internal, isolated | The only internal part that connects to dmz-import. Collects packages, verifies and decrypts them, and checks every PDF before int-app sees it. Holds the import decryption key. No console, no database, and no key that signs response packages. | Small agent, OpenSSL, PDF checks |
 | int-app | Internal | Console for internal readers. Stores verified documents, collects finished responses from the composing application, checks them and builds response packages. Holds the key that signs response packages. | Laravel and Vue web app, OpenSSL |
 | PKI service | Used by both networks, outside DXG | The organisation's existing signing and validation service. Seals and signs responses for the composing application, and validates them for int-app and ext-release. | eSign-API |
-| Composing application | Internal, outside DXG | The existing application in which users write and sign a response. Hands the finished PDF to DXG. | Existing |
+| Composing application | Internal, outside DXG | The existing application in which users write and sign a response. DXG collects the finished PDF from it. | Existing |
 | Databases | Each side | Requests, decisions, job queue and the audit log. One per network, never shared. | PostgreSQL |
 
 The software, in one line each:
@@ -187,7 +187,7 @@ Six risks remain by design. A design review also found a number of open issues, 
 | A software boundary, not a hardware data diode | Not proposed for classified networks without review. A hardware diode can replace the DMZ transfer later without changing the package format. |
 | The internal network trusts signature checks made on the external side | The validation report is signed into the package, and the original stays in the evidence store. |
 | Data hidden in a response on the way out | Responses are no longer rebuilt as images. The PKI service removes forms, actions and scripts before the seal, DLP reads the text, and size limits, the signatures and no recipient control on the internal network reduce the channel. |
-| One PKI service is reachable from both networks, and it reaches a cloud signature provider | DXG sends it only finished responses, never a file from the internet. Incoming files are validated on a separate instance. The service itself is outside DXG's control. |
+| One PKI service is reachable from both networks, and it reaches a cloud signature provider | DXG sends it only finished responses, never a file from the internet. Incoming files are validated on a separate instance. The service itself is outside DXG's control. The security team has accepted this. |
 | A compromised external core server | It can read every collected request and queued import. It can also record false approvals, and so release a waiting response to a recipient of its choice. It cannot change a response, and it cannot read the release key, which sits on a separate server. It can read a response only while an officer downloads it for manual delivery, which is how sensitive responses leave. The console is reachable only from the wired campus network, the internal network verifies every package, and the signing key can be revoked. |
 
 | Known gap | Proposed fix |
@@ -211,12 +211,11 @@ The full test list, with an ID for each case, is in section 10 of the [technical
 
 ## Decisions we need from the security team
 
-We ask for eight decisions, the last being approval to start the proof of concept.
+We ask for seven decisions, the last being approval to start the proof of concept.
 
 | Decision | Our proposal |
 | --- | --- |
 | Is a firewall-and-DMZ boundary acceptable for this internal network, or is a hardware data diode required? | Software boundary for the proof of concept and MVP, with the diode as the upgrade path if the internal network's classification requires it. |
-| Do you accept that one PKI service is reachable from both networks? It also reaches a cloud signature provider. | Accept. The organisation already runs it this way. DXG sends it only finished responses and never a file from the internet, and validates incoming files on a separate instance. |
 | Which signature trust anchors do we accept? | The EU trusted lists only. Other national or private CAs only through a reviewed change. |
 | What counts as a sensitive response, and which recipients need a second approver? | Defined with the service owner before phase 4. |
 | How long do we keep original emails, which hold personal data, plus audit logs and responses? | Set with the records and data protection owners before phase 2. |

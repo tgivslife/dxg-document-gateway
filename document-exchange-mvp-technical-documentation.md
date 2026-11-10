@@ -112,8 +112,8 @@ Appendix E.6 lists the roles, such as operator, release officer and reader.
 | DLP | Data loss prevention |
 | DSS | The European Commission's Digital Signature Service. The eSign-API builds on it, and DXG uses its validation policy format and result names (section 4.3) |
 | PAdES | PDF Advanced Electronic Signatures |
-| QES, `QESig` | Qualified electronic signature, the highest level of electronic signature under eIDAS. It names a person |
-| Qualified seal, `QESeal` | Qualified electronic seal, the organisation's counterpart of a qualified signature. It names a legal person and proves origin and integrity |
+| QES, `QESIG` | Qualified electronic signature, the highest level of electronic signature under eIDAS. It names a person |
+| Qualified seal, `QESEAL` | Qualified electronic seal, the organisation's counterpart of a qualified signature. It names a legal person and proves origin and integrity |
 | OCSP, CRL | Online certificate status checks and certificate revocation lists |
 | TSA | Timestamp authority |
 | OCR | Optical character recognition, which adds a text layer to a flattened PDF |
@@ -133,7 +133,7 @@ Each requirement has an ID that stays the same when this document changes. The s
 | FR-04 | Flatten selected documents to PDF, and normalize text files |
 | FR-05 | Unpack ZIP files within limits, and treat each file as a separate item |
 | FR-06 | Validate digitally signed PDFs before sanitization, and keep the original as evidence |
-| FR-07 | Give the internal side a sanitized copy, a signature status and an ETSI validation report |
+| FR-07 | Give the internal side a sanitized copy, a signature status and the validation report |
 | FR-08 | Accept a finished, signed response from the composing application, linked to an open request |
 | FR-09 | Require the server seal and at least one qualified user signature on each response. The signature is the approval |
 | FR-10 | Deliver approved responses to a release queue on the external network without sending them automatically |
@@ -348,10 +348,8 @@ flowchart TB
     WAIT -->|"Retry"| DSS
     DSS --> WORST{"Worst indication<br/>across all signatures"}
 
-    WORST -->|"TOTAL_PASSED"| SCOPE{"Signature scope"}
-    SCOPE -->|"Full"| EXTRACT["Signature accepted"]
-    SCOPE -->|"Partial"| REVIEW["Operator review"]
-    WORST -->|"INDETERMINATE"| REVIEW
+    WORST -->|"TOTAL_PASSED"| EXTRACT["Signature accepted"]
+    WORST -->|"INDETERMINATE"| REVIEW["Operator review"]
     REVIEW -->|"Accept with reason<br/>(review_accepted)"| EXTRACT
     REVIEW -->|"Refuse"| REJECT["Reject"]
 
@@ -360,13 +358,14 @@ flowchart TB
     FAILED -.->|"true, and the operator<br/>forwards it"| UNSIGNED["Sanitize as unsigned,<br/>state none"]
 
     EXTRACT --> SANITIZE["Flatten the whole file"]
-    SANITIZE --> PACKAGE["Package sanitized copy,<br/>signature state and ETSI report"]
+    SANITIZE --> PACKAGE["Package sanitized copy,<br/>signature state and validation report"]
     UNSIGNED --> PACKAGE
 ```
 
 Rules:
 
 - Sanitizing breaks a signature, so validation always happens first.
+- The signature scope does not decide the outcome. A signature that carries its validation data, at level LT or LTA, always reports a partial scope, because that data is added after it. The strict policy is what fails a file that was changed after signing. The console shows the scope as information.
 - The original stays in the evidence store on the external network. By default, it does not reach the internal network.
 - `INDETERMINATE` often means an unknown trust anchor, missing revocation data, or a temporary outage. An operator decides, and the package records `review_accepted` rather than `passed`.
 - `TOTAL_FAILED` is a rejection. `ALLOW_FAILED_AS_UNSIGNED` can allow an operator to forward the document as unsigned, and defaults to `false`.
@@ -376,14 +375,13 @@ The whole file is flattened, so the flattened copy shows every visible signature
 
 **Decision table for validation results**
 
-| Indication | Signature scope | Action | State sent to the internal side |
-| --- | --- | --- | --- |
-| `TOTAL_PASSED` | Full | Continue | `passed` |
-| `TOTAL_PASSED` | Partial | Operator review | `review_accepted` if accepted |
-| `INDETERMINATE` | Any | Operator review | `review_accepted` if accepted |
-| `TOTAL_FAILED` | Any | Reject | None |
-| Multiple signatures | Any | Use the worst result | As above |
-| `ext-validator` unavailable | Any | Keep item queued and alert | None |
+| Indication | Action | State sent to the internal side |
+| --- | --- | --- |
+| `TOTAL_PASSED` | Continue | `passed` |
+| `INDETERMINATE` | Operator review | `review_accepted` if accepted |
+| `TOTAL_FAILED` | Reject | None |
+| Multiple signatures | Use the worst result | As above |
+| `ext-validator` unavailable | Keep item queued and alert | None |
 
 ### 3.4 Response going out
 
@@ -504,14 +502,14 @@ A failed check rejects the response. `int-app` writes the reason to the response
 | Requirement | Value in the validation report |
 | --- | --- |
 | Everything valid | The seal and every signature are `TOTAL_PASSED` |
-| Server seal | The first signature in the file is at level `QESeal` |
-| Approval | At least one later signature is at level `QESig` |
-| Accepted levels only | Every level is in `RESPONSE_SIGNATURE_LEVELS`, which defaults to `QESig` and `QESeal` |
-| Timestamped | Each format is `PAdES-BASELINE-T`, `-LT` or `-LTA` |
-| Trusted timestamp | Each timestamp is valid. With `REQUIRE_QUALIFIED_TIMESTAMP`, its level is `QTSA` |
-| Nothing changed after sealing | The strict policy finds no change after the seal other than added signatures, and the latest signature covers the whole document |
+| Server seal | The first signature in `signatureList` has the level `QESEAL` |
+| Approval | At least one later signature has the level `QESIG` |
+| Accepted levels only | Every level is in `RESPONSE_SIGNATURE_LEVELS`, which defaults to `QESIG` and `QESEAL` |
+| Timestamped | Each `signatureFormat` is `PAdES_BASELINE_T`, `_LT` or `_LTA` |
+| Trusted timestamp | Each timestamp has the indication `PASSED`, and its certificate chain ends in an EU trusted list. The report does not yet say whether a timestamp is qualified, so `REQUIRE_QUALIFIED_TIMESTAMP` cannot be checked directly (section 12.2, issue 21) |
+| Nothing changed after sealing | Under the strict policy, the seal and every signature stay `TOTAL_PASSED`, and `validSignaturesCount` equals `signaturesCount`. The signature scope is not used, because it is always partial at level LT |
 
-There is no manual override. If revocation data or the PKI service is temporarily unavailable, the check waits and retries. If the rule fails, the composing application creates a new version. A level such as `AdESig-QC` or `AdESeal-QC` shows a qualified certificate, but not a qualified signature or seal, so it fails the rule.
+There is no manual override. If revocation data or the PKI service is temporarily unavailable, the check waits and retries. If the rule fails, the composing application creates a new version. Any other level fails the rule, including an advanced signature or seal that only has a qualified certificate.
 
 **What the PKI service flattens.** Before sealing, the PKI service turns form fields and annotations into page content, and removes actions, outlines, forms and JavaScript. This is not the flattening that DXG applies to incoming files: text, fonts and images stay as they are. DXG can therefore read real text for DLP, but it cannot remove content that is hidden inside a page (section 6.2).
 
@@ -594,7 +592,7 @@ This diagram shows every component and allowed connection in the POC.
 - **Rounded boxes are outside DXG**, such as services that DXG uses but does not manage.
 - **Hexagons are people** using a console.
 - **Each arrow** points from the side that opens the connection. Its label starts with the flow ID from section 5.1 and says what the connection is for.
-- **The dotted lines** are the hand-offs through the intake, outtake and response folders, which have no network connection.
+- **The dotted lines** are the hand-offs through the intake and outtake folders, which have no network connection.
 
 ```mermaid
 flowchart TB
@@ -652,7 +650,7 @@ flowchart TB
     INTCORE -->|"F8 Upload responses and acks"| DMZE
     INTUSERS -->|"F2 Console"| INTCORE
     INTCORE -->|"F11 Check signed responses"| PKI
-    COMPOSE -.-|"Response folder"| INTCORE
+    INTCORE -->|"F18 Collect responses,<br/>write results"| COMPOSE
 
     %% Layout only: stack the DMZ hosts so that no edge runs between them.
     DMZI ~~~ DMZE
@@ -711,14 +709,14 @@ The POC runs the sanitizer in a VM and everything else in Docker containers on o
 **Internal network**
 
 **`int-app`** (in `int-core`). Internal web app: stores verified documents for readers, collects finished responses from the response folder, checks them and builds response packages.
-- Software: Laravel, Vue, OpenSSL. Holds: `int-package-sign`, its API key for the PKI service, SFTP and verifier keys, database credentials, the response folder. Connections: F2 in; F8, F11, F15 out. No route to the external network or the internet, apart from the PKI service.
+- Software: Laravel, Vue, OpenSSL. Holds: `int-package-sign`, its API key for the PKI service, SFTP, spool and verifier keys, database credentials. Connections: F2 in; F8, F11, F15, F18 out. No route to the external network or the internet, apart from the PKI service.
 
 **`int-verifier`**. The only internal component that connects to `dmz-import` and parses what arrives from it. It collects packages, verifies and decrypts them, and checks every PDF (SR-15). `int-app` drives it through a forced-command interface (appendix D.5).
 - Software: a small agent, OpenSSL, the PDF checks (appendix F). Holds: `int-import-enc` and the SFTP key for `dmz-import`. It has no console, no database and no package signing key (`int-package-sign`). Connections: F15 in; F14 out. Kept apart from `int-app` so that a flaw in the SFTP client, the tar reader, CMS parsing or PDF parsing does not land in the component that holds the internal documents and the package signing key (`int-package-sign`).
 
 **PKI service** (outside DXG). The organisation's eSign-API. The composing application uses it to seal and sign responses. `int-app` and `ext-release` use it to validate them (F11, F12). One instance is reachable from both networks and reaches a cloud signature provider, so it is a path between the networks that DXG does not control (section 6.2). DXG never sends it a file from the internet (SR-18).
 
-**Composing application** (outside DXG). The internal application in which users write a response and sign it through the PKI service. It hands the finished PDF to DXG through the response folder (section 5.3).
+**Composing application** (outside DXG). The internal application in which users write a response and sign it through the PKI service. It leaves the finished PDF in the response folder on its own host, where `int-app` collects it (section 5.3).
 
 ### 4.3 Software used
 
@@ -758,6 +756,7 @@ Confirm licenses again when pinning versions.
 | `verifier-int` | `int-app` | Run verifier commands |
 | `release-ext` | `ext-app` | Start a release on `ext-release` |
 | `spool-ext-*` | `ext-app`, `ext-release` | One SSH key per adapter spool and direction. `ext-app` collects drops, and `ext-release` delivers items |
+| `spool-int` | `int-app` | SSH key for the response spool on the composing application's host |
 
 Rules:
 
@@ -800,6 +799,7 @@ The matrix names hosts, so it says `ext-core` for `ext-app` and `ext-postgres`. 
 | F15 | `int-core` | `int-verifier` | 22 | Run verifier commands |
 | F16 | `ext-core` | `ext-release` | 22 | Start a release, hand over the encrypted package |
 | F17 | `ext-release` | `ext-core` | 5432 | Read the release, record the result and the audit event |
+| F18 | `int-core` | Composing application host | 22 | Collect finished responses from the spool, write results |
 
 `ext-sanitizer` and both DMZ hosts have no outbound rules. `int-verifier` has one, F14. `int-core` has no route to the external network or the internet. F11 and F12 reach the same PKI service from both networks, which is the accepted exception to rule 2. Flow IDs F9 and F13 are no longer used.
 
@@ -977,10 +977,10 @@ The adapter checks `expires_at` and the file hash, delivers the file, writes a r
 
 ### 5.3 Response folder
 
-The response folder is where the composing application hands a finished response to DXG, and where DXG reports what became of it. It sits on `int-core` and follows the pattern of the intake folder in section 5.2.
+The response folder is where the composing application hands a finished response to DXG, and where DXG reports what became of it. It follows the pattern of the intake folder in section 5.2.
 
 ```text
-/srv/dxg/responses/
+/srv/spool/responses/
   .incoming/<response-id>/        Composing application is still writing
   ready/<response-id>/            Complete drop, waiting for int-app
   processing/<response-id>/       Claimed by int-app
@@ -988,7 +988,7 @@ The response folder is where the composing application hands a finished response
   results/<response-id>.json      Outcome, written by int-app
 ```
 
-The composing application attaches in one of the two ways in section 5.2: locally, under its own service account on `int-core`, or through a spool on its own host that `int-app` collects from and writes results to. Which one is used is a decision for the owner of that application (section 12.1).
+The composing application runs on its own host, so it attaches through a spool, like every adapter on its own host (section 5.2). The folder tree above is on that host. `int-app` collects complete drops from it and writes the results to it (flow F18). The composing application never connects to `int-core`. In the POC, the folder is a local folder mounted into `int-app`.
 
 A drop holds `response.json` and the signed PDF:
 
@@ -1066,7 +1066,7 @@ Section 6.1 lists what can go wrong and what limits the damage. Section 6.2 list
 - **Spreadsheets.** Formulas and live data do not reach the internal network.
 - **Trust in the external side.** The internal side cannot revalidate the original signature. It trusts a report signed by `ext-app`.
 - **Release approvals.** `ext-release` accepts the approvals that `ext-app` recorded, so whoever controls `ext-app` can release a queued response without an officer. A separate confirmation on `ext-release` would close this. It was left out so that officers and approvers use one login.
-- **Shared PKI service.** One instance of the PKI service is reachable from both networks and reaches a cloud signature provider. This is an exception to rule 2 that the organisation accepts. DXG limits its own part: it sends that service only finished responses, and validates files from the internet on a separate instance.
+- **Shared PKI service.** One instance of the PKI service is reachable from both networks and reaches a cloud signature provider. This is an exception to rule 2 that the security team has accepted. DXG limits its own part: it sends that service only finished responses, and validates files from the internet on a separate instance.
 - **DLP.** Rule-based text scanning catches obvious leaks only. Malware could hide data inside a page image.
 - **Availability.** Every component is a single instance.
 - **Support.** No vendor support exists. Open-source licenses, including Dangerzone's AGPLv3, need legal review for your use.
@@ -1160,8 +1160,8 @@ The inner tar contains fixed names only.
 
 ```text
 Import:   manifest.json, body.txt (only when the request has message text), documents/NNNNNN.pdf, documents/NNNNNN.txt,
-          reports/NNNNNN.etsi.xml
-Response: manifest.json, signed.pdf, reports/signature.etsi.xml
+          reports/NNNNNN.validation.json
+Response: manifest.json, signed.pdf, reports/signature.validation.json
 ```
 
 The passthrough (section 3.6) adds `originals/NNNNNN.pdf` and the `countersigned` response kind. Receivers reject both while that feature is disabled.
@@ -1344,7 +1344,7 @@ Keep hostile samples in a controlled store on the external network only.
 | T-65 | Certificate revoked between signing and release | Blocked at release |
 | T-66 | Decrypted response sent to `ext-validator` | Not possible by configuration |
 | T-67 | Delivered file compared with the approved upload | Identical, and the signature validates in a PDF reader |
-| T-68 | Valid signature from a non-qualified certificate, or level `AdESig-QC` or `AdESeal-QC` | Blocked at release |
+| T-68 | Valid signature from a non-qualified certificate, or at any level other than `QESIG` and `QESEAL` | Blocked at release |
 | T-69 | Qualified signature with no timestamp or an invalid timestamp | Blocked at release |
 
 ### 10.6 Infrastructure and performance tests
@@ -1394,7 +1394,7 @@ Phases 1 to 5 also answer these questions, which the design review left for the 
 | 1 | What does the allowlist for incoming PDFs look like? | The check is written from real Dangerzone output, and T-58 passes |
 | 1 | How much memory does OpenSSL need to decrypt and verify the largest package? | `MAX_PACKAGE_BYTES` and the host sizes in appendix E.1 are confirmed or changed |
 | 1 | Do the Compose networks behave as appendix E.8 says on the Linux POC host? | The console ports are reachable from the host only, and no DMZ container reaches a console |
-| 2 | What exactly does the eSign-API return from a validation call? Its API description leaves the response open | A recorded response shows the indication, level, format, scope and report, and the parser has a contract test |
+| 2 | Does `validate-signature` return the same report as `compare-and-validate-signature`, and does it apply the strict policy that DXG sends? | A recorded response for a tampered sample fails under the strict policy, and the parser has a contract test |
 | 3 | Which metadata and hidden content survive the flattening that the PKI service does before the seal? | Checked on sample responses, and section 6.2 is confirmed or corrected |
 | 3 | Which DLP rules run on the extracted text, and is a tool such as Presidio worth adding? | The rules are written down and tested on sample responses |
 | 5 | Can a maintained mail fetcher and a standard mail relay replace a custom adapter? | One fetcher is chosen against the mailbox server's login method, and T-17 passes |
@@ -1427,7 +1427,7 @@ A diode implementation has no `list` or `delete` across the link, so the receive
 
 ## 12. Open items
 
-Every item in this section is open unless it is marked closed. Closed issues keep their number. Section 12.1 lists decisions that named owners must make, each before the phase that depends on it, and section 12.2 lists issues that a design review found.
+Every item in this section is open unless it is marked closed. Closed issues keep their number. Section 12.1 lists decisions that named owners must make, each before the phase that depends on it. Section 12.2 lists issues that a design review found. Section 12.3 lists changes that DXG asks of the eSign-API.
 
 ### 12.1 Decisions needed
 
@@ -1439,7 +1439,6 @@ Every item in this section is open unless it is marked closed. Closed issues kee
 | Which trust anchors and CAs must be supported | PKI owner |
 | What counts as a sensitive response | Service owner |
 | Which recipients and domains need a second approver | Service owner |
-| How the composing application attaches to the response folder: locally or through a spool (section 5.3) | Owner of the composing application |
 | Whether responses need `PAdES-BASELINE-LT` or `-LTA` for long-term validation | PKI owner and records owner |
 | Whether and when to activate the passthrough in section 3.6 (not needed for the POC) | Security owner and service owner |
 | Whether to accept that `ext-release` trusts the approvals recorded by `ext-app` (section 6.2) | Security owner |
@@ -1469,11 +1468,26 @@ Medium:
 13. `deploy/ext-core/setup-folders.sh` still creates the outtake folder and the `dxg-release` user on `ext-core`, gives `dxg-web` access to the outtake folder, and creates a local `dxg-mail` user. For the MVP, the outtake part must move to a script for the `ext-release` VM, without `dxg-web`, and the mail adapter needs a spool host script in place of the local user. The script also still creates `results/` inside the outtake folder, and delivery results now belong in `outtake-results/` on disk.
 14. The flow matrix (section 5.1) has no flows for log shipping, backups, time synchronisation, administrative access, name resolution for `ext-egress`, or operating system patches for the external hosts. SR-10 has a described control only for the DMZ hosts (appendix E.5). The "signed after approval" check and every certificate check need correct clocks. `ext-core` collects DMZ logs over SFTP, but nothing says how logs reach the `/srv/xfer` folder that the SFTP accounts are confined to.
 15. Closed. Delivery results are kept on disk, outside the tmpfs (section 5.2).
-16. Closed. The whole file is flattened when validation passed with full scope (section 3.3, T-28).
+16. Closed. Every signed PDF that passes validation is flattened whole (section 3.3, T-28).
 17. `scripts/verify-envelope.sh` compares `payload_sha256` but not `payload_bytes` (section 8.4, step 6), and it fails on `ack` and `status` packages, which have no payload. `scripts/build-package.sh` also always adds a payload, so it builds only import and response packages.
 18. Closed. A reverse proxy per side publishes the console port, and the web applications join no published network (appendix E.8). To be confirmed on the Linux POC host.
 19. Closed. Appendix D.3 has the missing routes, both settings have a default (appendix A), and an officer downloads a manual-channel file through the console (appendix D.4).
 20. Closed. The message body is optional: `body.txt` is present only when the request has message text, and the console then shows "no message text". `message_id` stays as an optional column that only mail fills.
+21. The validation report of the eSign-API gives no qualification level for a timestamp. Until it does, DXG can check that a timestamp is valid and chains to an EU trusted list, but not that it is qualified, so `REQUIRE_QUALIFIED_TIMESTAMP` has no direct check. The change is requested in section 12.3.
+
+### 12.3 Changes requested in the eSign-API
+
+The eSign-API is developed in the organisation, so DXG asks for changes instead of working around gaps. None of them blocks phase 1.
+
+| Change | Why DXG needs it | Needed by |
+| --- | --- | --- |
+| Describe the validation response in the API description | DXG parses it, and today the description leaves it open (appendix D.2) | Phase 2 |
+| Report the qualification level of each timestamp | The signature rule requires a qualified timestamp, and the report shows only that a timestamp is valid (section 12.2, issue 21) | Phase 3 |
+| Confirm that a policy sent with a validation call is applied, and report which policy was used | DXG sends a strict policy with every call (appendix D.2) | Phase 2 |
+| A way to deploy the service with validation only | `ext-validator` must have no signing, cloud credentials or OAuth2 (appendix E.3) | Phase 2 |
+| A seal that appends to a file without flattening it | Only for the [passthrough design](document-exchange-signed-pdf-passthrough.md), section 2. Not needed for the MVP | Passthrough activation |
+
+DXG does not need a call that extracts the signed revision of a PDF. Incoming signed PDFs are flattened whole (section 3.3).
 
 ## Appendix A. Settings and default limits
 
@@ -1489,7 +1503,7 @@ These are starting values for the POC. The last column says where each setting i
 | `MAX_RESPONSE_PAGES` | 100 | Section 3.4 |
 | `MAX_RESPONSE_BYTES` | 25 MiB | Section 3.4 |
 | `SIGNATURE_MAX_APPEND_BYTES` | 2 MiB | [Passthrough design](document-exchange-signed-pdf-passthrough.md) only |
-| `RESPONSE_SIGNATURE_LEVELS` | `QESig`, `QESeal` | Section 3.4 |
+| `RESPONSE_SIGNATURE_LEVELS` | `QESIG`, `QESEAL` | Section 3.4 |
 | `REQUIRE_QUALIFIED_TIMESTAMP` | `true` | Section 3.4 |
 | `ZIP_MAX_ENTRIES` | 200 | Section 7.4 |
 | `ZIP_MAX_TOTAL_BYTES` | 500 MiB | Section 7.4 |
@@ -1533,7 +1547,7 @@ JSON Schema for the envelope: [`schemas/envelope.schema.json`](schemas/envelope.
 
 Example: [`examples/import-manifest.json`](examples/import-manifest.json).
 
-`signature.state` is one of `none`, `passed` or `review_accepted`. `int-app` keeps the ETSI report as an opaque file and displays values from the signed manifest, so the internal side does not need a rich XML viewer.
+`signature.state` is one of `none`, `passed` or `review_accepted`. `int-app` keeps the validation report as an opaque file and displays values from the signed manifest, so the internal side does not need a viewer for it.
 
 ### C.3 Response manifest example
 
@@ -1592,7 +1606,21 @@ Dangerzone exits `1` when it cannot flatten a file. Treat that as a rejected ite
 
 The request body holds `signedDocument` and `policy`, each with `bytes` and `name`. [`scripts/dss-validation-request.sh`](scripts/dss-validation-request.sh) builds it.
 
-The API description (version 2.3.1) does not define the response. Because the service builds on DSS, DXG expects the DSS reports: per signature an indication, sub-indication, signer, signing time, level, format and scope, and an ETSI TS 119 102-2 report. Record a real response in phase 2 and write the parser against it (section 11.1).
+The API description (version 2.3.1) does not define the response. The fields below were read from a real response of `compare-and-validate-signature`, which returns one report for each of its two documents. `validate-signature` is expected to return one such report.
+
+| Field | Use in DXG |
+| --- | --- |
+| `signaturesCount`, `validSignaturesCount` | Both must be equal for a response |
+| `signatureList` | One entry per signature, in the order of the file |
+| `indication`, `subIndication` | `TOTAL_PASSED`, `INDETERMINATE` or `TOTAL_FAILED`, as in sections 3.3 and 3.4 |
+| `signatureLevel.value` | `QESIG`, `QESEAL` or a lower level |
+| `signatureFormat` | For example `PAdES_BASELINE_LT` |
+| `signedBy`, `signingTime`, `bestSignatureTime` | Shown in the consoles and copied to the manifest |
+| `signatureScope[].scope` | Shown as information. `PARTIAL` is normal at level LT |
+| `timestamps[].indication`, `timestamps[].certificateChain` | `PASSED`, and a chain that ends in an EU trusted list |
+| `validationPolicy.policyName` | Recorded, to show which policy was applied |
+
+The report is JSON, not an ETSI report. DXG stores the whole report as `reports/*.validation.json` and treats it as an opaque file outside the fields above.
 
 DXG does not use the signing calls of the API, or `compare-and-validate-signature`.
 
@@ -1875,7 +1903,7 @@ Script: [`checks/signature_append_check.py`](checks/signature_append_check.py).
 | Reverse proxies and their networks in the Compose file | Checked with `docker compose config`, **not started** |
 | Strict DSS policy command | Executed against `constraint.xml` from DSS 6.5.1 |
 | Dangerzone CLI options and exit codes | Read from the 0.11.1 source and documentation, **not executed** |
-| eSign-API validation call | Read from its API description, version 2.3.1, **not executed**. The response format is not described there |
+| eSign-API validation call | Request read from its API description, version 2.3.1. Response fields read from one real response of the compare call. **Not executed** by this project |
 | Response folder, and the checks on a finished response | Specified only, **not built** |
 | `sshd_config`, Squid guidance, tmpfs mount and host sizing | **Not tested** |
 | Adapters, adapter spools, the channel registry and the intake worker | Specified only, **not built** |
@@ -1893,7 +1921,6 @@ Confirm these during phase 1 and phase 2. In particular, add a contract test tha
 - [EU DSS repository](https://github.com/esig/dss)
 - [DSS demonstrations repository](https://github.com/esig/dss-demonstrations)
 - [Digital Signature Service, European Commission](https://ec.europa.eu/digital-building-blocks/sites/display/DIGITAL/Digital%20Signature%20Service%20-%20%20DSS)
-- [ETSI TS 119 102-2: Signature Validation Report](https://www.etsi.org/deliver/etsi_ts/119100_119199/11910202/01.03.01_60/ts_11910202v010301p.pdf)
 - [Magika](https://opensource.googleblog.com/2024/02/magika-ai-powered-fast-and-efficient-file-type-identification.html)
 - [ANSSI Lidi](https://github.com/ANSSI-FR/lidi)
 - [NCSC: Cross domain approach and architecture](https://www.ncsc.gov.uk/collection/cross-domain), April 2026. It replaces the import and export patterns
