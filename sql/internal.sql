@@ -38,7 +38,7 @@ CREATE TABLE responses (
     signature_result text,
     dlp_result      jsonb,
     reject_reason   text CHECK (reject_reason IN (
-                        'schema', 'request_state', 'size', 'signature',
+                        'drop', 'schema', 'request_state', 'size', 'signature',
                         'pdf_policy', 'dlp', 'rejected_by_ext')),
     status          text NOT NULL CHECK (status IN (
                         'received', 'checking', 'rejected', 'sent',

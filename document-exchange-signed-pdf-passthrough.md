@@ -72,7 +72,7 @@ flowchart TB
     ELIGIBLE -->|"Yes"| SEND["Send original and<br/>flattened reading copy"]
     SEND --> STORE["int-verifier checks the original,<br/>int-app stores it in restricted storage"]
     STORE --> READ["Readers see the<br/>flattened copy in DXG"]
-    READ --> HAND["int-app places the original<br/>in the response spool for signing"]
+    READ --> HAND["int-app places the original<br/>in the response folder for signing"]
     HAND --> SIGN["Users sign the original in the<br/>composing application, through<br/>the PKI service"]
     SIGN --> RETURN{"Return required?"}
     RETURN -->|"No"| KEEP["Keep on the<br/>internal network"]
@@ -90,7 +90,7 @@ flowchart TB
 - `int-verifier` checks the original with `pdf_policy.py signed`. It cannot use the allowlist for flattened PDFs, because an original does not have the structure Dangerzone produces.
 - `int-app` keeps the original in restricted storage. The DXG console has no download route for it.
 - Readers see the flattened copy in the DXG console. It shows the whole file as it looks, with its visible signature stamps, and the console shows the signer details from the validation report.
-- When a user asks to sign, `int-app` checks the hash of the original and places it in a `signable/` folder of the response spool (section 5.3 of the [technical design](document-exchange-mvp-technical-documentation.md)), with the request ID and the hash.
+- When a user asks to sign, `int-app` checks the hash of the original and places it in a `signable/` folder of the response folder (section 5.3 of the [technical design](document-exchange-mvp-technical-documentation.md)), with the request ID and the hash.
 - The composing application passes the file to the PKI service without opening it. Each user signature is appended. The PKI service must never rewrite the file.
 
 ## 6. Return checks
@@ -118,7 +118,8 @@ These checks limit the leak path, but they cannot prove the appended data is cle
 | --- | --- |
 | Restricted original storage on `int-core` | Readable only by `int-app`, for the hand-over and for the return checks |
 | `int-verifier` | Must accept `originals/` when the feature is on, and check them with `pdf_policy.py signed` |
-| `signable/` folder in the response spool | Where `int-app` leaves an original for the composing application |
+| `signable/` folder in the response folder | Where `int-app` leaves an original for the composing application |
+| Response drop (section 5.3 of the [technical design](document-exchange-mvp-technical-documentation.md)) | `response.json` gains `kind`, set to `countersigned`, and `base_sha256`, the hash of the original |
 | Composing application | Must accept an original for signing, and must not open or render it |
 | eSign-API | Must be able to add user signatures, and a seal if one is required, without rewriting the file |
 
@@ -135,7 +136,7 @@ The import manifest gains these fields for each eligible document:
 }
 ```
 
-A `countersigned` response uses the manifest in appendix C.3 of the [technical design](document-exchange-mvp-technical-documentation.md), with two more fields that describe the original:
+A `countersigned` response uses the manifest in appendix C.3 of the [technical design](document-exchange-mvp-technical-documentation.md), with two more fields that describe the original. Whether it also carries the seal fields depends on open point 1 in section 2, so they are left out here:
 
 ```json
 {

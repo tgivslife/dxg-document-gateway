@@ -30,6 +30,7 @@ services:
     networks: [ext-release-call, ext-release-db, ext-pki]
     volumes:
       - ./folders/outtake:/srv/dxg/outtake
+      - ./folders/outtake-results:/srv/dxg/outtake-results
     secrets: [ext_release_enc, ext_release_db_password, ext_release_pki_key]
 
   ext-postgres:

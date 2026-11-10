@@ -13,7 +13,7 @@ Requests arrive by email at a mailbox on the internet-connected network, called 
 The solution must:
 
 - Bring only the selected documents into the internal network, never an executable, script, macro or other active content.
-- Keep the internal network off the internet: nothing connects into it, and it never connects out. The one exception is the organisation's PKI service, which both networks use.
+- Keep the internal network off the internet: nothing connects into it, and it never connects to the internet or to the external network. The one exception is the organisation's PKI service, which both networks use.
 - Send each response as a PDF that carries the organisation's qualified seal, at least one qualified user signature and a qualified timestamp, unchanged after signing.
 - Let the internal network decide what a response says, and let the external network choose who receives it.
 - Record every decision against the request, from the original email to the delivered response.
@@ -91,7 +91,7 @@ flowchart TB
     style INT fill:#ebf5ec,stroke:#7fbf8a
 ```
 
-The core servers are the two application servers: ext-app on the external network and int-app on the internal network. ext-release, which decrypts a response at release, runs on its own server. Each core server talks only to its own isolated helpers and to the DMZ. ext-app also reaches the release server and the mail adapter's server. On the internal network, a separate verifier collects what arrives from the DMZ, so the server that holds the internal documents never parses a package itself. Nothing on the external side or in the DMZ can open a connection to the internal network.
+The core servers are the two application servers: ext-app on the external network and int-app on the internal network. ext-release, which decrypts a response at release, runs on its own server. Each core server talks only to its own isolated helpers and to the DMZ. ext-app also reaches the release server and the mail adapter's server, and the release server reads the database beside ext-app. int-app also reaches the composing application's server and the PKI service. On the internal network, a separate verifier collects what arrives from the DMZ, so the server that holds the internal documents never parses a package itself. Nothing on the external side or in the DMZ can open a connection to the internal network.
 
 **Incoming request, external network to internal network**
 
@@ -120,7 +120,7 @@ Six rules carry the design, and each is enforced by a control rather than by tru
 | --- | --- | --- |
 | 1 | Nothing from the internet reaches the internal network unchanged | Every document is rebuilt as a flattened PDF. Only flattened PDFs, normalized text and signed validation reports cross. |
 | 2 | Nothing connects into the internal network | Both networks connect out to the DMZ servers. The DMZ servers accept file transfers only from the two core servers and the internal verifier, and cannot open connections themselves. The one exception is the PKI service, which both networks reach. |
-| 3 | Untrusted files are opened only in disposable isolation | A dedicated virtual machine with no keys and no network opens them, and each document is flattened inside a further sandbox. The machine is reset from a clean snapshot daily. |
+| 3 | Untrusted files are opened only in disposable isolation | A dedicated virtual machine with no keys and no outbound network opens them, and each document is flattened inside a further sandbox. The machine is reset from a clean snapshot daily. |
 | 4 | Packages cannot be read or forged in transit | The sender signs each package and encrypts it for the receiver, with pinned certificates, sequence numbers and replay detection. Each direction has its own DMZ server, account and keys. |
 | 5 | People decide, the system enforces | An operator selects what enters. A response needs the organisation's seal and at least one user signature, which is the approval. The internal network cannot set a recipient, and the release officer cannot edit the file. |
 | 6 | Every step is traceable | Both sides keep a hash-chained audit log linked to the request ID. Original emails stay in an evidence store on the external network. |
@@ -129,13 +129,13 @@ Antivirus and type checks only reject known-bad files early. Flattening is the m
 
 ## Components
 
-Each part does one job, and the parts that open untrusted files hold no keys and have no network access.
+Each part does one job. The sanitizer, which opens untrusted files, holds no keys and has no outbound network. The validator for incoming PDFs reaches the internet only through an allowlist proxy.
 
 | Component | Network | What it does | Runs |
 | --- | --- | --- | --- |
 | ext-app | External | Console for operators and release officers, reachable only from the wired campus network. Runs intake, workflow and packaging. Holds the key that signs packages. | Laravel and Vue web app, OpenSSL |
 | ext-release | External, own server | Decrypts an approved response at release and hands it to the outgoing channel. Only holder of the release decryption key and of the outtake folder. Decrypted responses stay off the ext-app server, except a response for manual delivery while an officer downloads it through the console. | Small service, OpenSSL |
-| ext-sanitizer | External, isolated VM | The only place untrusted files are opened: parses email, detects file types, scans, checks macros, unpacks ZIPs and flattens documents to PDF. No keys, no outbound network, reset daily. | Python agent, Magika, ClamAV, oletools, Dangerzone |
+| ext-sanitizer | External, isolated VM | The only place where untrusted files are opened and rebuilt: parses email, detects file types, scans, checks macros, unpacks ZIPs and flattens documents to PDF. No keys, no outbound network, reset daily. | Python agent, Magika, ClamAV, oletools, Dangerzone |
 | ext-validator | External, isolated | Validates signatures on incoming signed PDFs against the EU trusted lists. A separate instance of the PKI service software, with signing switched off, so that no file from the internet reaches the shared service. | eSign-API |
 | ext-egress | External | The only way out to the internet for ext-validator and for antivirus updates. Allows trust lists, revocation checks, timestamps and antivirus updates, and denies everything else. | Squid proxy |
 | ext-mail-adapter (MVP) | External, own server | Fetches mail and sends released responses. No keys and no database access. ext-app collects requests from it and ext-release delivers responses to it, so it never connects to them. | IMAP and SMTP client |
@@ -183,10 +183,10 @@ Six risks remain by design. A design review also found a number of open issues, 
 
 | Remaining risk | What limits it |
 | --- | --- |
-| An exploit in Dangerzone that escapes both the sandbox and the VM | The VM holds no keys and has no network, it is reset daily, and the internal network checks every PDF again. |
+| An exploit in Dangerzone that escapes both the sandbox and the VM | The VM holds no keys and has no outbound network, it is reset daily, and the internal network checks every PDF again. |
 | A software boundary, not a hardware data diode | Not proposed for classified networks without review. A hardware diode can replace the DMZ transfer later without changing the package format. |
 | The internal network trusts signature checks made on the external side | The validation report is signed into the package, and the original stays in the evidence store. |
-| Data hidden in a response on the way out | Responses are no longer rebuilt as images. The PKI service removes forms, actions and scripts before the seal, DLP reads the text, and size limits, the signatures and no recipient control on the internal network reduce the channel. |
+| Data hidden in a response on the way out | DXG does not rebuild responses as images, as it does incoming files. The PKI service removes forms, actions and scripts before the seal, DLP reads the text, and size limits, the signatures and no recipient control on the internal network reduce the channel. |
 | One PKI service is reachable from both networks, and it reaches a cloud signature provider | DXG sends it only finished responses, never a file from the internet. Incoming files are validated on a separate instance. The service itself is outside DXG's control. The security team has accepted this. |
 | A compromised external core server | It can read every collected request and queued import. It can also record false approvals, and so release a waiting response to a recipient of its choice. It cannot change a response, and it cannot read the release key, which sits on a separate server. It can read a response only while an officer downloads it for manual delivery, which is how sensitive responses leave. The console is reachable only from the wired campus network, the internal network verifies every package, and the signing key can be revoked. |
 
