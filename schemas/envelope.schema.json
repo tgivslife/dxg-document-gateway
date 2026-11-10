@@ -6,19 +6,19 @@
   "required": ["schema", "package_id", "type", "seq", "request_id", "created_at"],
   "properties": {
     "schema": { "const": "dxg-envelope/1" },
-    "package_id": { "type": "string", "format": "uuid" },
+    "package_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
     "type": { "enum": ["import", "response", "ack", "status"] },
     "seq": { "type": "integer", "minimum": 1 },
-    "request_id": { "type": "string", "format": "uuid" },
-    "created_at": { "type": "string", "format": "date-time" },
+    "request_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "created_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$" },
     "payload_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "payload_bytes": { "type": "integer", "minimum": 1 },
     "sensitivity": { "enum": ["normal", "sensitive"] },
     "response_version": { "type": "integer", "minimum": 1 },
-    "ack_package_id": { "type": "string", "format": "uuid" },
+    "ack_package_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
     "ack_result": { "enum": ["accepted", "rejected"] },
     "ack_reason": { "enum": ["signature", "schema", "sequence", "hash", "pdf_policy", "request_state", "feature_disabled"] },
-    "status": { "enum": ["released", "expired", "bounced"] }
+    "status": { "enum": ["released", "expired"] }
   },
   "allOf": [
     {

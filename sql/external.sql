@@ -5,12 +5,13 @@ CREATE TABLE requests (
     message_id      text,
     sender          text,
     subject         text,
+    reply_hint      jsonb,
     drop_sha256     char(64) NOT NULL,
     evidence_path   text NOT NULL,
     status          text NOT NULL CHECK (status IN (
                         'received', 'screening', 'awaiting_selection',
-                        'processing', 'awaiting_review', 'queued_for_b',
-                        'delivered_to_b', 'response_ready', 'closed',
+                        'processing', 'awaiting_review', 'queued_for_internal',
+                        'delivered_to_internal', 'response_ready', 'closed',
                         'rejected', 'failed')),
     received_at     timestamptz NOT NULL,
     UNIQUE (source_adapter, source_reference)
@@ -31,7 +32,7 @@ CREATE TABLE items (
     passthrough     boolean NOT NULL DEFAULT false,
     status          text NOT NULL CHECK (status IN (
                         'screened', 'rejected', 'selected', 'not_selected',
-                        'validating', 'awaiting_review', 'converting',
+                        'validating', 'awaiting_review', 'flattening',
                         'ready', 'failed')),
     reject_reason   text,
     selected_by     text
@@ -48,8 +49,8 @@ CREATE TABLE signature_validations (
     signed_by       text,
     signature_level text,
     signing_time    timestamptz,
-    scope_full      boolean NOT NULL,
-    dss_version     text NOT NULL,
+    scope_full      boolean,
+    validator_version text NOT NULL,
     policy_sha256   char(64) NOT NULL,
     report_path     text NOT NULL,
     review_decision text CHECK (review_decision IN ('accepted', 'refused')),
@@ -93,6 +94,7 @@ CREATE TABLE releases (
     response_id     uuid NOT NULL REFERENCES responses(id),
     channel         text NOT NULL,
     recipient       text NOT NULL,
+    channel_data    jsonb NOT NULL DEFAULT '{}',
     reason          text,
     created_by      text NOT NULL,
     approved_by     text,
@@ -111,6 +113,6 @@ CREATE TABLE audit_events (
     request_id      uuid,
     subject_id      uuid,
     details         jsonb NOT NULL DEFAULT '{}',
-    previous_hash   char(64) NOT NULL,
+    previous_hash   char(64) NOT NULL UNIQUE,
     event_hash      char(64) NOT NULL
 );

@@ -6,12 +6,15 @@
   "file": "signed.pdf",
   "sha256": "6666666666666666666666666666666666666666666666666666666666666666",
   "bytes": 214880,
-  "base_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
-  "base_bytes": 198000,
-  "approved_at": "2026-11-04T10:42:09Z",
-  "signed_by": "Example Signer",
-  "signature_level": "QESig",
-  "signature_format": "PAdES-BASELINE-T",
-  "timestamp_time": "2026-11-04T11:05:31Z",
-  "report": "reports/signature.etsi.xml"
+  "sealed_by": "Example Organisation",
+  "seal_level": "QESEAL",
+  "signers": [
+    {
+      "signed_by": "Example Signer",
+      "level": "QESIG",
+      "format": "PAdES_BASELINE_LT",
+      "timestamp_time": "2026-11-04T11:05:31Z"
+    }
+  ],
+  "report": "reports/signature.validation.json"
 }

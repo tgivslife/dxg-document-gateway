@@ -9,7 +9,8 @@ openssl cms -sign -binary -nodetach -md sha256 \
   -in "$inner" -outform DER -out "$out/inner.p7s"
 
 openssl cms -encrypt -binary -aes-256-gcm \
-  -in "$out/inner.p7s" -outform DER -out "$out/payload.cms" "$recipient"
+  -recip "$recipient" -keyopt ecdh_kdf_md:sha256 \
+  -in "$out/inner.p7s" -outform DER -out "$out/payload.cms"
 
 hash=$(sha256sum "$out/payload.cms" | cut -d' ' -f1)
 bytes=$(stat -c %s "$out/payload.cms")
