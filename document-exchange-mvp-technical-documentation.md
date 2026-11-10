@@ -506,7 +506,7 @@ A failed check rejects the response. `int-app` writes the reason to the response
 | Approval | At least one later signature has the level `QESIG` |
 | Accepted levels only | Every level is in `RESPONSE_SIGNATURE_LEVELS`, which defaults to `QESIG` and `QESEAL` |
 | Timestamped | Each `signatureFormat` is `PAdES_BASELINE_T`, `_LT` or `_LTA` |
-| Trusted timestamp | Each timestamp has the indication `PASSED`, and its certificate chain ends in an EU trusted list. The report does not yet say whether a timestamp is qualified, so `REQUIRE_QUALIFIED_TIMESTAMP` cannot be checked directly (section 12.2, issue 21) |
+| Trusted timestamp | Each timestamp has the indication `PASSED`, and its certificate chain ends in an EU trusted list. The report does not yet say whether a timestamp is qualified, so `REQUIRE_QUALIFIED_TIMESTAMP` cannot be checked directly (section 12.2, issue 5) |
 | Nothing changed after sealing | Under the strict policy, the seal and every signature stay `TOTAL_PASSED`, and `validSignaturesCount` equals `signaturesCount`. The signature scope is not used, because it is always partial at level LT |
 
 There is no manual override. If revocation data or the PKI service is temporarily unavailable, the check waits and retries. If the rule fails, the composing application creates a new version. Any other level fails the rule, including an advanced signature or seal that only has a qualified certificate.
@@ -780,7 +780,7 @@ The qualified certificates that seal and sign response PDFs are outside DXG. The
 
 ### 5.1 Flow matrix
 
-The matrix names hosts, so it says `ext-core` for `ext-app` and `ext-postgres`. Everything not listed is denied. Supporting flows for logs, backups, time synchronisation, administration, name resolution and patches are not designed yet (section 12.2, issue 14). In the POC, Docker networks enforce these rules (appendix E.8). In the MVP, they are enforced at the zone firewall and again on each host.
+The matrix names hosts, so it says `ext-core` for `ext-app` and `ext-postgres`. Everything not listed is denied. Supporting flows for logs, backups, time synchronisation, administration, name resolution and patches are not designed yet (section 12.2, issue 3). In the POC, Docker networks enforce these rules (appendix E.8). In the MVP, they are enforced at the zone firewall and again on each host.
 
 | ID | Source | Destination | Port | Purpose |
 | --- | --- | --- | --- | --- |
@@ -1430,7 +1430,7 @@ A diode implementation has no `list` or `delete` across the link, so the receive
 
 ## 12. Open items
 
-Every item in this section is open unless it is marked closed. Closed issues keep their number. Section 12.1 lists decisions that named owners must make, each before the phase that depends on it. Section 12.2 lists issues that a design review found. Section 12.3 lists changes that DXG asks of the eSign-API.
+Every item in this section is open. Section 12.1 lists decisions that named owners must make, each before the phase that depends on it. Section 12.2 lists issues that a design review found. Section 12.3 lists changes that DXG asks of the eSign-API.
 
 ### 12.1 Decisions needed
 
@@ -1449,34 +1449,18 @@ Every item in this section is open unless it is marked closed. Closed issues kee
 
 ### 12.2 Known issues
 
-A design review left these items open. Each open item needs a fix or a decision before or during the POC.
+A design review left these items open. Each needs a fix or a decision before or during the POC. An issue that is closed is removed from this list.
 
 High:
 
-1. Closed. DXG no longer receives an unsigned version of a response, so there is no append check. The PKI service confirms that nothing changed after the seal (section 3.4).
-2. **The allowlist PDF check is not written.** `int-verifier` must accept only the structure that Dangerzone produces (appendix D.5, T-58), but `pdf_policy.py` is still a denylist (appendix F.1). Until the allowlist exists, a compromised external host could send a PDF with a hostile font or image and no forbidden key. Write the allowlist from real Dangerzone output in phase 1.
-3. Closed. The PKI service timestamps the seal and every signature (section 3.4).
-4. Closed. The mail adapter runs on its own host with a spool, `ext-app` collects from it and `ext-release` delivers to it (section 5.2).
+1. **The allowlist PDF check is not written.** `int-verifier` must accept only the structure that Dangerzone produces (appendix D.5, T-58), but `pdf_policy.py` is still a denylist (appendix F.1). Until the allowlist exists, a compromised external host could send a PDF with a hostile font or image and no forbidden key. Write the allowlist from real Dangerzone output in phase 1.
 
 Medium:
 
-5. Closed. On each DMZ host only the sender's account can write, and the receiver's account is read-only (appendix E.5).
-6. Closed. `int-verifier`, which decrypts import packages, gets scratch space of at least twice `MAX_PACKAGE_BYTES`, and the Compose file sets it. `ext-release` decrypts only responses, which are at most `MAX_RESPONSE_BYTES`.
-7. Closed. `ext-app` checks the size before it builds a package, and the operator sends fewer items (section 3.2). The limit is 200 MiB, to be confirmed in phase 1.
-8. Closed. The agent has an `update-definitions` command, and `ext-app` sends definitions after each restore (appendix D.1).
-9. Closed. The Compose file now names a database secret for `ext-app`, `ext-release` and `int-app`, and the key for the F16 call.
-10. Closed. Section 7.5 defines the handling of signed mail, attached messages, inline images, sender checks and the reply hint. Section 7.2 rejects encrypted mail, and sections 7.1 and 7.2 cover the file types.
-11. Closed. The `bounced` status is removed. Bounce handling is in the backlog (section 11.2).
-12. Closed. The internal side no longer runs a sanitizer or a validator, so it needs no trust-list snapshots and no Dangerzone templates. Operating system patches for the internal hosts use the organisation's existing patch process for the internal network. DXG imports nothing else.
-13. `deploy/ext-core/setup-folders.sh` still creates the outtake folder and the `dxg-release` user on `ext-core`, gives `dxg-web` access to the outtake folder, and creates a local `dxg-mail` user. For the MVP, the outtake part must move to a script for the `ext-release` VM, without `dxg-web`, and the mail adapter needs a spool host script in place of the local user. The script also still creates `results/` inside the outtake folder, and delivery results now belong in `outtake-results/` on disk.
-14. The flow matrix (section 5.1) has no flows for log shipping, backups, time synchronisation, administrative access, name resolution for `ext-egress`, or operating system patches for the external hosts. SR-10 has a described control only for the DMZ hosts (appendix E.5). The timestamp and certificate checks need correct clocks. `ext-app` collects DMZ logs over SFTP, but nothing says how logs reach the `/srv/xfer` folder that the SFTP accounts are confined to.
-15. Closed. Delivery results are kept on disk, outside the tmpfs (section 5.2).
-16. Closed. Every signed PDF that passes validation is flattened whole (section 3.3, T-28).
-17. `scripts/verify-envelope.sh` compares `payload_sha256` but not `payload_bytes` (section 8.4, step 6), and it fails on `ack` and `status` packages, which have no payload. `scripts/build-package.sh` also always adds a payload, so it builds only import and response packages.
-18. Closed. A reverse proxy per side publishes the console port, and the web applications join no published network (appendix E.8). To be confirmed on the Linux POC host.
-19. Closed. Appendix D.3 has the missing routes, `SECOND_APPROVAL_DOMAINS` and `TEXT_FALLBACK_ENCODINGS` have a default (appendix A), and an officer downloads a manual-channel file through the console (appendix D.4).
-20. Closed. The message body is optional: `body.txt` is present only when the request has message text. When it is absent, the console shows "no message text". `message_id` stays as an optional column that only mail fills.
-21. The validation report of the eSign-API gives no qualification level for a timestamp. Until it does, DXG can check that a timestamp is valid and chains to an EU trusted list, but not that it is qualified, so `REQUIRE_QUALIFIED_TIMESTAMP` has no direct check. The change is requested in section 12.3.
+2. `deploy/ext-core/setup-folders.sh` still creates the outtake folder and the `dxg-release` user on `ext-core`, gives `dxg-web` access to the outtake folder, and creates a local `dxg-mail` user. For the MVP, the outtake part must move to a script for the `ext-release` VM, without `dxg-web`, and the mail adapter needs a spool host script in place of the local user. The script also still creates `results/` inside the outtake folder, and delivery results now belong in `outtake-results/` on disk.
+3. The flow matrix (section 5.1) has no flows for log shipping, backups, time synchronisation, administrative access, name resolution for `ext-egress`, or operating system patches for the external hosts. SR-10 has a described control only for the DMZ hosts (appendix E.5). The timestamp and certificate checks need correct clocks. `ext-app` collects DMZ logs over SFTP, but nothing says how logs reach the `/srv/xfer` folder that the SFTP accounts are confined to.
+4. `scripts/verify-envelope.sh` compares `payload_sha256` but not `payload_bytes` (section 8.4, step 6), and it fails on `ack` and `status` packages, which have no payload. `scripts/build-package.sh` also always adds a payload, so it builds only import and response packages.
+5. The validation report of the eSign-API gives no qualification level for a timestamp. Until it does, DXG can check that a timestamp is valid and chains to an EU trusted list, but not that it is qualified, so `REQUIRE_QUALIFIED_TIMESTAMP` has no direct check. The change is requested in section 12.3.
 
 ### 12.3 Changes requested in the eSign-API
 
@@ -1485,7 +1469,7 @@ The eSign-API is developed in the organisation, so DXG asks for changes instead 
 | Change | Why DXG needs it | Needed by |
 | --- | --- | --- |
 | Describe the validation response in the API description | DXG parses it, and today the description leaves it open (appendix D.2) | Phase 2 |
-| Report the qualification level of each timestamp | The signature rule requires a qualified timestamp, and the report shows only that a timestamp is valid (section 12.2, issue 21) | Phase 3 |
+| Report the qualification level of each timestamp | The signature rule requires a qualified timestamp, and the report shows only that a timestamp is valid (section 12.2, issue 5) | Phase 3 |
 | Confirm that a policy sent with a validation call is applied, and report which policy was used | DXG sends a strict policy with every call (appendix D.2) | Phase 2 |
 | A way to deploy the service with validation only | `ext-validator` must have no signing, cloud credentials or OAuth2 (appendix E.3) | Phase 2 |
 | A seal that appends to a file without flattening it | Only for the [passthrough design](document-exchange-signed-pdf-passthrough.md), section 2. Not needed for the MVP | Passthrough activation |
@@ -1719,7 +1703,7 @@ Rules:
 - `open` and `discard` accept only a `package_id` that matches the UUID pattern in the envelope schema.
 - `int-app` reads tar output from `int-verifier` with a strict reader, as `ext-app` does for the sanitizer agent (appendix D.1). It relies on `int-verifier` for the signature checks.
 - A rejected package stays on `int-verifier` in a rejected folder (section 8.4) until an administrator removes it.
-- Step 11 on `int-verifier` is where the allowlist check for incoming PDFs runs (section 12.2, issue 2).
+- Step 11 on `int-verifier` is where the allowlist check for incoming PDFs runs (section 12.2, issue 1).
 - Limits for every command are set as for the sanitizer agent.
 
 ## Appendix E. Deployment
@@ -1823,7 +1807,7 @@ Serve both consoles over TLS only. Use MFA on every account on the external netw
 
 ### E.7 Intake and outtake folders
 
-The example setup for the MVP `ext-core` VM is in [`deploy/ext-core/setup-folders.sh`](deploy/ext-core/setup-folders.sh). It still creates both folders on one host. In the MVP, the outtake folder is on the `ext-release` VM (section 12.2, issue 13). In the POC, the same two folders are host folders mounted into the containers.
+The example setup for the MVP `ext-core` VM is in [`deploy/ext-core/setup-folders.sh`](deploy/ext-core/setup-folders.sh). It still creates both folders on one host. In the MVP, the outtake folder is on the `ext-release` VM (section 12.2, issue 2). In the POC, the same two folders are host folders mounted into the containers.
 
 Mount the outtake folder on tmpfs before creating its subfolders, and create them at boot. Example `fstab` entry:
 
