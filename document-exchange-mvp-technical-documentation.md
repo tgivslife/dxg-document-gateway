@@ -714,8 +714,8 @@ Confirm licenses again when pinning versions.
 | Squid | Forward proxy, used here as an allowlist | Distribution version | GPL-2.0 |
 | OpenSSH | SFTP-only server on the DMZ hosts, and the transport for agent commands | Distribution version | BSD-style |
 | nftables | Host firewall on each MVP host | Distribution version | GPL-2.0 |
-| OpenSSL | CMS signing and encryption of packages | 3.0 or later | Apache-2.0 |
-| pikepdf, qpdf | Inspect PDF structure for the PDF checks (appendix F) | 10.17.0, 11.9 | MPL-2.0, Apache-2.0 |
+| OpenSSL | CMS signing and encryption of packages | 3.5 LTS or later | Apache-2.0 |
+| pikepdf, qpdf | Inspect PDF structure for the PDF checks (appendix F) | 10.18.0, 12.4.2 | MPL-2.0, Apache-2.0 |
 | Laravel, Vue | Web app and console UI on both sides | Current stable | MIT |
 | PostgreSQL | Database and job queue | 16 or later | PostgreSQL License |
 | Docker, KVM | POC hosting: containers, and VMs for the sanitizers | Not pinned | Apache-2.0 (Docker Engine), GPL-2.0 (KVM) |
@@ -998,7 +998,7 @@ The passthrough (section 3.6) adds `originals/NNNNNN.pdf` and the `countersigned
 
 ### 8.2 Envelope and manifests
 
-The envelope has no recipient, subject or free-text field. `additionalProperties: false` makes that a checked rule. Appendix C.1 gives its JSON schema. `seq` increases by one per direction and is independent for each direction.
+The envelope has no recipient, subject or free-text field. `additionalProperties: false` makes that a checked rule. IDs and times are checked with `pattern`, because validators do not enforce `format` by default. Appendix C.1 gives its JSON schema. `seq` increases by one per direction and is independent for each direction.
 
 Each payload carries a manifest. Appendix C.2 and C.3 show the import and response manifests.
 
@@ -1581,7 +1581,7 @@ The POC runs 11 containers on one Docker host with Docker Compose. The two sanit
 **POC rules:**
 
 - **Use test data only.** Dangerzone is isolated in a VM, but `ext-validator` and `int-app` still share one kernel on the Docker host. A DSS exploit from a hostile PDF could cross between the networks.
-- **Docker networks do not enforce direction.** A DMZ container could try to connect to `int-app`, so it publishes no listening port on those networks. The MVP firewall enforces this properly.
+- **Docker networks do not enforce direction.** Containers on the same Docker network can reach each other's listening ports, whatever `ports:` publishes. Each DMZ container shares a network with `ext-app` and with `int-app`, so it could connect to either console. In the POC, each web server must therefore listen only on its address on its own stack network, `ext-core` or `int-core`, and not on all interfaces. The Compose file does not express this yet. Confirm it in phase 1 by trying to connect from each DMZ container to both consoles. The MVP firewall enforces direction properly.
 - **Run PDF checks as a restricted subprocess** in `ext-app` and `int-app`, so that these containers need no access to the Docker socket. The MVP uses a separate restricted container.
 - **Restore the sanitizer VMs daily** from a clean snapshot.
 - **Use only the folders for files.** `dxg-drop` writes to `./folders/intake`, and released PDFs appear in `./folders/outtake/ready/`. The consoles handle decisions, not file transfer.
@@ -1599,6 +1599,8 @@ Run `pdf_policy.py output` on the external side before packaging, and on the int
 
 Script: [`checks/pdf_policy.py`](checks/pdf_policy.py).
 
+The script runs the `qpdf` command and then pikepdf, which contains its own copy of qpdf. Install the `qpdf` command in the same version as that copy, 12.4.2 for pikepdf 10.18.0, so that one file is not judged by two different parsers. Distribution packages are older.
+
 ### F.2 Signature append check
 
 Run on every signed response, with the approved PDF as the base. The passthrough (section 3.6) uses it with the signed original as the base.
@@ -1609,8 +1611,8 @@ Script: [`checks/signature_append_check.py`](checks/signature_append_check.py).
 
 | Item | Status |
 | --- | --- |
-| Package create, verify and open scripts | Executed with OpenSSL 3.0.13, including tamper and wrong-signer cases |
-| Envelope schema | Tested against valid and invalid envelopes, including a `recipient` field |
+| Package create, verify and open scripts | Executed with OpenSSL 3.0.13, including tamper and wrong-signer cases. The SHA-256 key derivation option was added later, and the sign, encrypt, decrypt and verify steps were executed again with OpenSSL 3.5.7 |
+| Envelope schema | Tested against valid and invalid envelopes, including a `recipient` field. The ID and time patterns were added later and tested on their own, **not with a schema validator** |
 | Manifest, drop and delivery examples | Parsed as JSON only |
 | Docker Compose file | Checked with `docker compose config`, and its network graph was checked for isolation. **Not started**, because no Docker daemon or registry was available |
 | Sanitizer VMs attached to Docker bridges | **Not tested** |

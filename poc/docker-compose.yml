@@ -16,7 +16,7 @@ services:
     volumes:
       - ./folders/intake:/srv/dxg/intake
       - ext-evidence:/srv/dxg/evidence
-      - ./folders/outtake:/srv/dxg/outtake
+      - ./folders/outtake:/srv/dxg/outtake:ro
     secrets: [ext_package_sign, sftp_ext, agent_ext]
 
   ext-release:
