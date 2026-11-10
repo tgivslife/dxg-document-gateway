@@ -4,7 +4,7 @@ Teodor Ion · 4 November 2026
 
 ## What we ask
 
-We ask the security team for seven decisions, listed at the end of this proposal. The last one is approval to start a proof of concept on one isolated host, with test data only.
+We ask the security team for eight decisions, listed at the end of this proposal. The last one is approval to start a proof of concept on one isolated host, with test data only.
 
 ## The need
 
@@ -172,7 +172,7 @@ The cost is fidelity. Flattened PDFs keep a document's look but lose formulas, l
 
 ## Remaining risks and known gaps
 
-Five risks remain by design. A design review also found thirteen open issues. The four most serious are listed here and must be closed before the proof of concept. The [technical design](document-exchange-mvp-technical-documentation.md) lists all thirteen in section 12.2.
+Five risks remain by design. A design review also found a number of open issues. The four most serious are listed here and must be closed before the proof of concept. The [technical design](document-exchange-mvp-technical-documentation.md) lists all of them in section 12.2.
 
 | Remaining risk | What limits it |
 | --- | --- |
@@ -206,7 +206,7 @@ The full test list, with an ID for each case, is in section 10 of the [technical
 
 ## Decisions we need from the security team
 
-We ask for seven decisions, the last being approval to start the proof of concept.
+We ask for eight decisions, the last being approval to start the proof of concept.
 
 | Decision | Our proposal |
 | --- | --- |
@@ -216,6 +216,7 @@ We ask for seven decisions, the last being approval to start the proof of concep
 | What counts as a sensitive response, and which recipients need a second approver? | Defined with the service owner before phase 4. |
 | How long do we keep original emails, which hold personal data, plus audit logs and responses? | Set with the records and data protection owners before phase 2. |
 | What must the independent penetration test cover? | The sanitizer agent, package parsers, both consoles and every network path. |
+| Do you accept that the release service trusts the approvals recorded by the external console? A compromised external core server could then release a waiting response to a recipient of its choice. | Accept for the MVP. The console is reachable only from the wired campus network, the release key sits on a separate server, and a response cannot be changed. A second confirmation on the release service would close the gap, at the price of a second login for officers and approvers. |
 | May we start the proof of concept? | One isolated host, test data only, no connection to the real mailbox or the internal network. |
 
 Passing a signed PDF through unchanged, so the internal network can countersign it, is designed in a [separate document](document-exchange-signed-pdf-passthrough.md) but switched off. We do not ask for it now. Turning it on later would need a written risk acceptance.

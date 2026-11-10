@@ -16,7 +16,7 @@ services:
     volumes:
       - ./folders/intake:/srv/dxg/intake
       - ext-evidence:/srv/dxg/evidence
-    secrets: [ext_package_sign, sftp_ext, agent_ext]
+    secrets: [ext_package_sign, ext_db_password, ext_dss_client, sftp_ext_import, sftp_ext_export, agent_ext, release_ext]
 
   ext-release:
     <<: *app
@@ -24,7 +24,7 @@ services:
     networks: [ext-core, ext-check]
     volumes:
       - ./folders/outtake:/srv/dxg/outtake
-    secrets: [ext_release_enc]
+    secrets: [ext_release_enc, ext_release_db_password, ext_release_dss_client]
 
   ext-postgres:
     image: postgres:16
@@ -68,7 +68,7 @@ services:
     ports: ["127.0.0.1:8081:8080"]
     networks: [int-core, int-sanitize, int-validate, int-verify, int-to-export]
     volumes: [int-documents:/srv/dxg/documents]
-    secrets: [int_package_sign, sftp_int, agent_int, verifier_int]
+    secrets: [int_package_sign, int_db_password, int_dss_client, sftp_int_export, agent_int, verifier_int]
 
   int-verifier:
     <<: *app
@@ -130,12 +130,18 @@ secrets:
   ext_package_sign: { file: ./secrets/ext-package-sign.pem }
   ext_release_enc: { file: ./secrets/ext-release-enc.pem }
   ext_db_password: { file: ./secrets/ext-db-password }
-  sftp_ext: { file: ./secrets/sftp-ext }
+  ext_release_db_password: { file: ./secrets/ext-release-db-password }
+  ext_dss_client: { file: ./secrets/ext-dss-client.pem }
+  ext_release_dss_client: { file: ./secrets/ext-release-dss-client.pem }
+  sftp_ext_import: { file: ./secrets/sftp-ext-import }
+  sftp_ext_export: { file: ./secrets/sftp-ext-export }
+  release_ext: { file: ./secrets/release-ext }
   agent_ext: { file: ./secrets/agent-ext }
   int_package_sign: { file: ./secrets/int-package-sign.pem }
   int_import_enc: { file: ./secrets/int-import-enc.pem }
   int_db_password: { file: ./secrets/int-db-password }
-  sftp_int: { file: ./secrets/sftp-int }
+  int_dss_client: { file: ./secrets/int-dss-client.pem }
+  sftp_int_export: { file: ./secrets/sftp-int-export }
   agent_int: { file: ./secrets/agent-int }
   sftp_int_import: { file: ./secrets/sftp-int-import }
   verifier_int: { file: ./secrets/verifier-int }

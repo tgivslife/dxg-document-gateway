@@ -111,6 +111,6 @@ CREATE TABLE audit_events (
     request_id      uuid,
     subject_id      uuid,
     details         jsonb NOT NULL DEFAULT '{}',
-    previous_hash   char(64) NOT NULL,
+    previous_hash   char(64) NOT NULL UNIQUE,
     event_hash      char(64) NOT NULL
 );

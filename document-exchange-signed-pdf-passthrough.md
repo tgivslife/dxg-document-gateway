@@ -32,6 +32,7 @@ This is a deliberate exception to rule 1 in section 1.1 of the [technical design
 - A valid signature does not prove that a file is safe.
 - The structural checks can find active content, but they cannot prove that fonts or images are free of exploits. An unchanged file can still attack the program that opens it.
 - A returned PDF contains appended data that DLP cannot fully inspect, so it is a possible leak path.
+- With the return enabled, `ext-response-validator` validates a file that came from the internet. Without this feature it never does, which is why SR-14 keeps it apart from `ext-validator`.
 
 ## 3. Eligibility at intake
 

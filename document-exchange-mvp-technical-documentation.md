@@ -694,7 +694,7 @@ The POC runs the two sanitizers in VMs and everything else in Docker containers 
 - Software: Laravel, Vue, OpenSSL. Holds: `ext-package-sign`, the DSS client key, SFTP, agent and release keys, database credentials, the evidence store. Connections: F1 in; F3, F4, F7, F10, F16 out.
 
 **`ext-release`**. The release service: decrypts an approved response at release, runs the final checks (appendix D.4) and writes the file to the outtake folder. In the MVP it runs on its own VM, apart from `ext-core`, and the outtake folder is on that VM (SR-16). Root on `ext-core` can then read neither the release key nor a decrypted response.
-- Holds: `ext-release-enc`, the release decryption key, as its only holder, and the outtake folder. Connections: F16 in; F12, F17 out.
+- Holds: `ext-release-enc`, the release decryption key, as its only holder, its own DSS client key and database credentials, and the outtake folder. Connections: F16 in; F12, F17 out.
 - It accepts the approvals that `ext-app` recorded in the database, and cannot check them itself (section 6.2).
 
 **`ext-postgres`, `int-postgres`**. Database and job queue for each side, with the hash-chained audit log (appendix B). The job queue is Laravel's database queue, so DXG needs no separate queue server. Reachable only inside its stack, except that `ext-release` reaches `ext-postgres` (F17).
@@ -719,7 +719,7 @@ The POC runs the two sanitizers in VMs and everything else in Docker containers 
 **Internal network**
 
 **`int-app`** (in `int-core`). Internal web app: stores verified documents, and runs drafting, approval, the signing upload, DLP and response packaging.
-- Software: Laravel, Vue, OpenSSL. Holds: `int-package-sign`, SFTP, agent and verifier keys, database credentials. Connections: F2 in; F8, F9, F11, F15 out. No route to the external network or the internet.
+- Software: Laravel, Vue, OpenSSL. Holds: `int-package-sign`, the DSS client key, SFTP, agent and verifier keys, database credentials. Connections: F2 in; F8, F9, F11, F15 out. No route to the external network or the internet.
 
 **`int-verifier`**. The only internal component that connects to `dmz-import` and parses what arrives from it. It collects packages, verifies and decrypts them, and checks every PDF (SR-15). `int-app` drives it through a forced-command interface (appendix D.5).
 - Software: a small agent, OpenSSL, the PDF checks (appendix F). Holds: `int-import-enc` and the SFTP key for `dmz-import`. It has no console, no database and no response signing key. Connections: F15 in; F14 out. Kept apart from `int-app` so that a flaw in the SFTP client, the tar reader, CMS parsing or PDF parsing does not land in the component that holds the internal documents and the response signing key.
@@ -757,7 +757,10 @@ Confirm licenses again when pinning versions.
 | `int-import-enc` | `int-verifier` | Decrypt import payloads |
 | `int-package-sign` | `int-app` | Sign response packages and acks |
 | `ext-release-enc` | `ext-release` | Decrypt responses at release |
-| `ext-dss-client` | `ext-app` | Authenticate to DSS |
+| `ext-dss-client` | `ext-app` | Authenticate to `ext-validator` |
+| `ext-release-dss-client` | `ext-release` | Authenticate to `ext-response-validator` |
+| `int-dss-client` | `int-app` | Authenticate to `int-validator` |
+| `ext-console-tls`, `int-console-tls` | `ext-app`, `int-app` | TLS server certificates for the two consoles |
 | `sftp-ext-*`, `sftp-int-*` | `ext-app`, `int-app`, `int-verifier` | Separate SSH keys per host and direction. `int-verifier` holds the key for `dmz-import`, and `int-app` the key for `dmz-export` |
 | `agent-ext`, `agent-int` | `ext-app`, `int-app` | Run agent commands |
 | `verifier-int` | `int-app` | Run verifier commands |
@@ -785,12 +788,12 @@ Qualified certificates used to sign response PDFs are outside DXG. They are held
 
 ### 5.1 Flow matrix
 
-The matrix names hosts, so it says `ext-core` for `ext-app` and `ext-postgres`. Everything not listed is denied. In the POC, Docker networks enforce these rules (appendix E.8). In the MVP, they are enforced at the zone firewall and again on each host.
+The matrix names hosts, so it says `ext-core` for `ext-app` and `ext-postgres`. Everything not listed is denied. Supporting flows for logs, backups, time synchronisation, administration, name resolution and patches are not designed yet (section 12.2, issue 14). In the POC, Docker networks enforce these rules (appendix E.8). In the MVP, they are enforced at the zone firewall and again on each host.
 
 | ID | Source | Destination | Port | Purpose |
 | --- | --- | --- | --- | --- |
-| F1 | Operator browser on the wired campus network | `ext-core` | 8080 | Console only: select files, review results, release responses |
-| F2 | Internal user browser | `int-core` | 8081 | Console only: work on requests, approve and sign responses |
+| F1 | Operator browser on the wired campus network | `ext-core` | 8080 | Console only, over TLS: select files, review results, release responses |
+| F2 | Internal user browser | `int-core` | 8081 | Console only, over TLS: work on requests, approve and sign responses |
 | F3 | `ext-core` | `ext-sanitizer` | 22 | Run agent commands |
 | F4 | `ext-core` | `ext-validator` | 8443 | DSS REST calls |
 | F5 | `ext-validator` | `ext-egress` | 3128 | Trust lists, OCSP, CRL, TSA |
@@ -1062,6 +1065,8 @@ The receiver stops at the first failure, keeps the package in a rejected folder,
 
 On the internal side, `int-verifier` runs steps 1 to 4, 6 and 8 to 11. `int-app` runs steps 5 and 7 between them, because only `int-app` has the database (appendix D.5). On the external side, `ext-app` runs steps 1 to 7 at receipt and `ext-release` runs steps 8 to 11 at release (appendix D.4).
 
+A package that fails before step 5 does not use up a sequence number, because its `seq` is not yet trusted. A DMZ host therefore cannot block a channel by placing forged or damaged packages. A package that fails at step 5 or later has used its number, and the sender resends the content with a new `package_id` and `seq` (section 9.4).
+
 A `seq` gap puts the channel in a blocked state and alerts an operator, who decides whether to accept the gap after checking for lost packages.
 
 ## 9. Operations
@@ -1237,11 +1242,23 @@ Keep hostile samples in a controlled store on the external network only.
 | --- | --- | --- |
 | 1. Import POC | Intake folder, `dxg-drop`, agent, screening, Dangerzone, basic console, DMZ transfer, `int-verifier` | T-01 to T-16, T-30 to T-36, T-45 and T-58 pass |
 | 2. Signed PDFs | DSS, strict policy, evidence store, reports, review flow | T-20 to T-27 and T-46 pass |
-| 3. Response path | Internal workflow, flattening, DLP rules, approvals, PDF signing upload, `int-validator`, package signing and encryption | T-37, T-38 and T-60 to T-69 pass |
-| 4. Release console | Queue, policy rules, second approval, outtake folder | T-39 to T-44 pass |
+| 3. Response path | Internal workflow, flattening, DLP rules, approvals, PDF signing upload, `int-validator`, package signing and encryption | T-37, T-38 and T-61 to T-63 pass |
+| 4. Release console | Queue, policy rules, second approval, `ext-release`, outtake folder | T-39 to T-44, T-60 and T-64 to T-69 pass |
 | 5. Hardening | Move from Docker to VMs, add the mail adapter, monitoring, backups, access review, procedures, separate hardware | T-17, T-50 to T-57 and T-59 pass |
 | 6. MVP sign-off | Independent penetration test and fixes | Section 10.7 met |
 | Optional | Signed PDF passthrough, then return, only after an activation decision | Section 9 of the [passthrough design](document-exchange-signed-pdf-passthrough.md) met |
+
+Phases 1 to 5 also answer these questions, which the design review left for the POC:
+
+| Phase | Question | Done when |
+| --- | --- | --- |
+| 1 | Does Magika agree with a rule-based detector, such as libmagic or Siegfried, on the test corpus? | Disagreements are listed, and section 7.2 says which detector decides |
+| 1 | What does the allowlist for incoming PDFs look like? | The check is written from real Dangerzone output, and T-58 passes |
+| 1 | How much memory does OpenSSL need to decrypt and verify the largest package? | `MAX_PACKAGE_BYTES` and the host sizes in appendix E.1 are confirmed or changed |
+| 1 | Do the Compose networks behave as appendix E.8 says on the Linux POC host? | The console ports are reachable from the host only, and no DMZ container reaches a console |
+| 1 | Do the package scripts work with the keys in a PKCS#11 device? | Sign, encrypt, decrypt and verify pass with SoftHSM |
+| 3 | Which DLP rules run on the extracted text, and is a tool such as Presidio worth adding? | The rules are written down and tested on sample responses |
+| 5 | Can a maintained mail fetcher and a standard mail relay replace a custom adapter? | One fetcher is chosen against the mailbox server's login method, and T-17 passes |
 
 ### 11.2 Backlog
 
@@ -1281,9 +1298,10 @@ Nothing in this section is settled. Section 12.1 lists decisions that named owne
 | Which trust anchors and CAs must be supported | PKI owner |
 | What counts as a sensitive response | Service owner |
 | Which recipients and domains need a second approver | Service owner |
-| How the signing tool reaches a trusted timestamp service from the internal network | PKI owner and network owner |
+| How the signing tool reaches a trusted timestamp service from the internal network, and a remote seal service if the organisation's seal is not on a local device | PKI owner and network owner |
 | Whether responses need `PAdES-BASELINE-LT` or `-LTA` for long-term validation | PKI owner and records owner |
 | Whether and when to activate the passthrough in section 3.6 (not needed for the POC) | Security owner and service owner |
+| Whether to accept that `ext-release` trusts the approvals recorded by `ext-app` (section 6.2) | Security owner |
 | Whether emails containing personal data may stay in the evidence store, and for how long | Data protection owner |
 
 ### 12.2 Known issues
@@ -1303,11 +1321,17 @@ Medium:
 6. `open-payload.sh` decrypts into `/dev/shm`, which Docker limits to 64 MB by default, below `MAX_PACKAGE_BYTES`.
 7. Nothing defines what happens when a package would exceed `MAX_PACKAGE_BYTES`, although a ZIP can unpack to `ZIP_MAX_TOTAL_BYTES` and flattening makes files larger.
 8. ClamAV definitions reach `ext-sanitizer` daily (section 9.2), but the agent has no command for it (appendix D.1) and the snapshot restore removes them.
-9. In the Compose file, `ext-release` has no database secret, and `ext-app` has no key for the F16 call.
+9. Closed. The Compose file now names a database secret for `ext-app`, `ext-release` and `int-app`, and the key for the F16 call.
 10. Mail handling skips S/MIME, attached messages, `winmail.dat`, `.pptx`, `.rtf`, `.heic` and inline images, shows no SPF, DKIM or DMARC result, and does not say whether the suggested recipient is From or Reply-To.
 11. The `bounced` status has no source and no matching internal state.
 12. Maintenance imports into the internal network (trust-list snapshots, Dangerzone templates, OS patches) have no design.
 13. `deploy/ext-core/setup-folders.sh` still creates the outtake folder and the `dxg-release` user on `ext-core`, and gives `dxg-web` access to the outtake folder. For the MVP, the outtake part must move to a script for the `ext-release` VM, without `dxg-web`.
+14. The flow matrix (section 5.1) has no flows for log shipping, backups, time synchronisation, administrative access, name resolution for `ext-egress`, or operating system patches for the external hosts. SR-10 has a described control only for the DMZ hosts (appendix E.5). The "signed after approval" check and every certificate check need correct clocks. `ext-core` collects DMZ logs over SFTP, but nothing says how logs reach the `/srv/xfer` folder that the SFTP accounts are confined to.
+15. Delivery results are written inside the outtake folder, which is a tmpfs (section 5.2). If the host restarts after the adapter delivered a response and before `ext-release` recorded the result, the release moves to `failed`, and a retry sends the response twice. Keeping `results/` on disk would fix this, because a result holds no document content.
+16. Section 3.3 always extracts the signed revision of an incoming signed PDF. DSS returns no document when the signature is in the first revision of the file, and that case has no path.
+17. `scripts/verify-envelope.sh` compares `payload_sha256` but not `payload_bytes` (section 8.4, step 6), and it fails on `ack` and `status` packages, which have no payload.
+18. `ext-app` and `int-app` join only internal Docker networks, and Docker does not publish ports for such containers. The console ports in the Compose file will probably not be reachable. A small reverse proxy on a second network is one fix.
+19. The API tables in appendix D.3 have no route for marking a response sensitive, accepting a sequence gap, downloading a manual-channel file, or reading the audit log. `TEXT_FALLBACK_ENCODINGS` and `SECOND_APPROVAL_DOMAINS` have no value yet (appendix A).
 
 ## Appendix A. Settings and default limits
 
@@ -1356,7 +1380,7 @@ Tables for the external database: [`sql/external.sql`](sql/external.sql).
 
 Tables for the internal database: [`sql/internal.sql`](sql/internal.sql).
 
-`event_hash` is the SHA-256 of `previous_hash` plus the canonical JSON of the event. The application database role has `INSERT` and `SELECT` only on `audit_events`. Export the latest hash daily to a location that the application cannot write to.
+`event_hash` is the SHA-256 of `previous_hash` plus the canonical JSON of the event. The first event uses 64 zeros as its `previous_hash`. `previous_hash` is unique, so two events cannot follow the same event and the chain cannot fork. The application database role has `INSERT` and `SELECT` only on `audit_events`. Export the latest hash daily to a location that the application cannot write to.
 
 ## Appendix C. Package schema, manifests and scripts
 
@@ -1490,7 +1514,7 @@ For each call, it:
 7. Writes the file and `delivery.json` to the channel's outtake folder.
 8. Writes the audit event, and deletes its own plaintext copy.
 
-`ext-release` reads the adapter's result in `outtake/results/` and records it, which completes the release.
+`ext-release` reads the adapter's result in `outtake/results/` and records it in the database as soon as it appears, which completes the release.
 
 `ext-release` cannot check an approval itself. It accepts what `ext-app` recorded in the database (section 6.2).
 
@@ -1565,7 +1589,7 @@ For the POC, start with 8 vCPU, 16 GiB RAM and 200 GiB disk for the Docker conta
 - For the POC, the `dss-demo-webapp` from the matching `dss-demonstrations` release exposes the required REST endpoints.
 - For the MVP, build a small service exposing only the two REST operations, instead of deploying a demonstration application.
 - Disable signing endpoints, server-side keystores, and anything else this project does not use.
-- Require mutual TLS from `ext-core`.
+- Require mutual TLS from every caller. `ext-app`, `ext-release` and `int-app` each have their own client key (section 4.4).
 - Load EU trusted lists from the official list of trusted lists. Add national or private trust anchors only through a reviewed change.
 - Alert if the trust-list cache goes stale.
 - Run three separate instances: `ext-validator`, `ext-response-validator` and `int-validator`.
@@ -1616,7 +1640,7 @@ Transfer rules:
 | Auditor | Both | Read requests and audit logs |
 | Administrator | Both | Manage configuration, without any release or approval right |
 
-Use MFA on every account on the external network. Use the existing directory on the internal network if it can be reached. Otherwise, use local accounts with MFA. One person must not hold both an officer and approver role.
+Serve both consoles over TLS only. Use MFA on every account on the external network. Use the existing directory on the internal network if it can be reached. Otherwise, use local accounts with MFA. One person must not hold both an officer and approver role.
 
 ### E.7 Intake and outtake folders
 
@@ -1694,7 +1718,7 @@ Script: [`checks/signature_append_check.py`](checks/signature_append_check.py).
 | Sanitizer VMs attached to Docker bridges | **Not tested** |
 | Folder setup script | Executed as root, and tested with intake, outtake and channel-separation scenarios, without the tmpfs mount |
 | Diagrams | Embedded as Mermaid blocks in this file. All blocks rendered without errors with mermaid-cli 11.4.2 |
-| SQL for both networks | Applied to PostgreSQL 16 |
+| SQL for both networks | Applied to PostgreSQL 16. The renamed statuses, the nullable internal `subject` and the unique `previous_hash` were added later and **not applied** |
 | `pdf_policy.py` | Executed against clean PDFs, real signed PDFs, and PDFs with JavaScript, links, attachments, launch actions and signature locks |
 | `signature_append_check.py` | Executed with visible, invisible, certified, second and timestamped signatures, and with altered, rewritten, unsigned, timestamp-only and oversized files |
 | nftables ruleset | Checked with `nft -c` |
@@ -1720,5 +1744,7 @@ Confirm these during phase 1 and phase 2. In particular, add a contract test tha
 - [ETSI TS 119 102-2: Signature Validation Report](https://www.etsi.org/deliver/etsi_ts/119100_119199/11910202/01.03.01_60/ts_11910202v010301p.pdf)
 - [Magika](https://opensource.googleblog.com/2024/02/magika-ai-powered-fast-and-efficient-file-type-identification.html)
 - [ANSSI Lidi](https://github.com/ANSSI-FR/lidi)
-- [NCSC: Design Pattern for Safely Exporting Data](https://www.ncsc.gov.uk/guidance/design-pattern-safely-exporting-data)
+- [NCSC: Cross domain approach and architecture](https://www.ncsc.gov.uk/collection/cross-domain), April 2026. It replaces the import and export patterns
+- [NCSC: Design Pattern for Safely Exporting Data](https://www.ncsc.gov.uk/guidance/design-pattern-safely-exporting-data), 2019, being deprecated
+- [ANSSI-PA-101: Recommandations pour les architectures des interconnexions multiniveaux](https://messervices.cyber.gouv.fr/documents-guides/anssi-guide-archi_interco_mn-v1-0.pdf), October 2024. Written for classified systems, used here as a benchmark
 - [Mladenov et al.: 1 Trillion Dollar Refund, attacks on PDF signatures](https://cse.buffalo.edu/~wenyaoxu/courses/fall2020/CSE741_Fall2020_Ref/PDF_Signature.pdf)

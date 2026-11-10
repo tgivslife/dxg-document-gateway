@@ -1,7 +1,7 @@
 CREATE TABLE requests (
     id              uuid PRIMARY KEY,
     sender          text,
-    subject         text NOT NULL,
+    subject         text,
     body_path       text NOT NULL,
     status          text NOT NULL CHECK (status IN ('open', 'closed')),
     received_at     timestamptz NOT NULL
@@ -69,6 +69,6 @@ CREATE TABLE audit_events (
     request_id      uuid,
     subject_id      uuid,
     details         jsonb NOT NULL DEFAULT '{}',
-    previous_hash   char(64) NOT NULL,
+    previous_hash   char(64) NOT NULL UNIQUE,
     event_hash      char(64) NOT NULL
 );
