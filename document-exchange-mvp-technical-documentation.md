@@ -108,7 +108,8 @@ Appendix E.6 lists the roles, such as operator, release officer, author, approve
 | DLP | Data loss prevention |
 | DSS | The European Commission's Digital Signature Service, used to validate signatures (section 4.3) |
 | PAdES | PDF Advanced Electronic Signatures |
-| QES, `QESig` | Qualified electronic signature, the highest level of electronic signature under eIDAS |
+| QES, `QESig` | Qualified electronic signature, the highest level of electronic signature under eIDAS. It names a person |
+| Qualified seal, `QESeal` | Qualified electronic seal, the organisation's counterpart of a qualified signature. It names a legal person and proves origin and integrity |
 | OCSP, CRL | Online certificate status checks and certificate revocation lists |
 | TSA | Timestamp authority |
 | OCR | Optical character recognition, which adds a text layer to a flattened PDF |
@@ -487,13 +488,13 @@ Checks after signing:
 | Requirement | DSS value |
 | --- | --- |
 | Valid signature | `TOTAL_PASSED` |
-| Qualified signature | Level is in `RESPONSE_SIGNATURE_LEVELS`, which defaults to `QESig` |
+| Qualified signature or seal | Level is in `RESPONSE_SIGNATURE_LEVELS`, which defaults to `QESig` and `QESeal` |
 | Timestamped signature | Format is `PAdES-BASELINE-T`, `-LT` or `-LTA` |
 | Trusted timestamp | Timestamp is valid. With `REQUIRE_QUALIFIED_TIMESTAMP`, its level is `QTSA` |
 | Signed after approval | Timestamp is later than `approved_at` |
 | Whole document covered | Signature scope is full |
 
-There is no manual override. If revocation data is temporarily unavailable, the release waits and retries. If the rule fails, the internal side creates a new signed version. A level such as `AdESig-QC` shows a qualified certificate, but not a qualified signature, so it fails the rule.
+There is no manual override. If revocation data is temporarily unavailable, the release waits and retries. If the rule fails, the internal side creates a new signed version. A level such as `AdESig-QC` or `AdESeal-QC` shows a qualified certificate, but not a qualified signature or seal, so it fails the rule. In the rest of this document, "signature" on a response means either a qualified signature or a qualified seal.
 
 A failed check returns the response to the signer. Rewriting a PDF on save fails the append check, so the signing tool must save incrementally. A document timestamp added after signing is allowed, because it is also an appended update. It does not count as a signature.
 
@@ -1156,7 +1157,7 @@ Keep hostile samples in a controlled store on the external network only.
 
 | ID | Scenario | Expected result |
 | --- | --- | --- |
-| T-60 | Flattened PDF with a visible or invisible qualified signature and a trusted timestamp | Passes all checks and is delivered byte for byte |
+| T-60 | Flattened PDF with a visible or invisible qualified signature, or a qualified seal, and a trusted timestamp | Passes all checks and is delivered byte for byte |
 | T-61 | Signed file rewritten by a tool that does not save incrementally | Rejected as not append-only |
 | T-62 | Upload with no signature | Rejected |
 | T-63 | Signed file with changed page content | Rejected |
@@ -1164,7 +1165,7 @@ Keep hostile samples in a controlled store on the external network only.
 | T-65 | Certificate revoked between signing and release | Blocked at release |
 | T-66 | Decrypted response sent to `ext-validator` | Not possible by configuration |
 | T-67 | Delivered file compared with the approved upload | Identical, and the signature validates in a PDF reader |
-| T-68 | Valid signature from a non-qualified certificate, or level `AdESig-QC` | Blocked at release |
+| T-68 | Valid signature from a non-qualified certificate, or level `AdESig-QC` or `AdESeal-QC` | Blocked at release |
 | T-69 | Qualified signature with no timestamp, an invalid timestamp, or a timestamp before approval | Blocked at release |
 
 ### 10.6 Infrastructure and performance tests
@@ -1280,7 +1281,7 @@ These are starting values for the POC. The last column says where each setting i
 | `MAX_RESPONSE_PAGES` | 100 | Section 3.4 |
 | `MAX_RESPONSE_BYTES` | 25 MiB | Section 3.4 |
 | `SIGNATURE_MAX_APPEND_BYTES` | 2 MiB | Section 3.4 |
-| `RESPONSE_SIGNATURE_LEVELS` | `QESig` | Section 3.4 |
+| `RESPONSE_SIGNATURE_LEVELS` | `QESig`, `QESeal` | Section 3.4 |
 | `REQUIRE_QUALIFIED_TIMESTAMP` | `true` | Section 3.4 |
 | `TRUST_SNAPSHOT_MAX_DAYS` | 7 | Appendix E.3 |
 | `ZIP_MAX_ENTRIES` | 200 | Section 7.4 |

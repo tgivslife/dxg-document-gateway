@@ -14,7 +14,7 @@ The solution must:
 
 - Bring only the selected documents into the internal network, never an executable, script, macro or other active content.
 - Keep the internal network off the internet: nothing connects into it, and it never connects out.
-- Send each response as a PDF with a qualified electronic signature and a trusted timestamp, unchanged after approval.
+- Send each response as a PDF with a qualified electronic signature or seal and a trusted timestamp, unchanged after approval.
 - Let the internal network approve what a response says, and let the external network choose who receives it.
 - Record every decision against the request, from the original email to the delivered response.
 
@@ -92,7 +92,7 @@ The core servers are the two application servers: ext-app with ext-release on th
 
 1. A user on the internal network drafts a response to an open request. The draft is flattened, which removes metadata, comments and hidden content, then checked by data loss prevention (DLP) rules.
 2. A different user approves it.
-3. A signer signs the approved PDF with a qualified certificate and a timestamp. The system checks that only a signature was added.
+3. A signer signs the approved PDF with a qualified certificate and a timestamp. Both a personal qualified signature and the organisation's qualified seal are accepted. The system checks that only a signature was added.
 4. The response is packed, signed, encrypted and left on the export server. The external network collects it and keeps it encrypted.
 5. A release officer chooses the recipient and channel. Sensitive responses and unusual recipients need a second approver. A final signature check runs, and the file leaves byte for byte as signed.
 
