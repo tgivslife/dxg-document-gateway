@@ -37,7 +37,7 @@ Section 2.2 turns these rules into security requirements. Section 3.6 defines on
 
 | In scope | Out of scope for the MVP |
 | --- | --- |
-| Intake and outtake folders, with a mail adapter added for the MVP | Other adapters, such as rsync or an HTTP API |
+| A general adapter interface at the intake and outtake folders (section 5.2), with three adapters: folder drop, manual collection and mail | Other adapters, such as an upload portal, an SFTP drop or an HTTP API. The interface allows them, and the MVP does not build them |
 | File allowlist, type detection, ClamAV screening | Commercial CDR |
 | Sanitization to flattened PDF with Dangerzone | Editable Office output on the internal network |
 | TXT normalization and safe ZIP unpacking | RAR, 7z and other archive formats |
@@ -80,9 +80,11 @@ Section 2.2 turns these rules into security requirements. Section 3.6 defines on
 
 | Term | Meaning |
 | --- | --- |
-| Request | One received email and everything derived from it |
-| Item | One attachment, or one file unpacked from a ZIP |
-| Adapter | A small service that moves files between an outside source or target and a folder |
+| Request | One submission received through an intake adapter, such as an email with its attachments, and everything derived from it |
+| Item | One submitted file, such as an attachment, or one file unpacked from a ZIP |
+| Adapter | A small service that moves files between an outside source or target and a folder. Mail is one adapter, and the interface is the same for all (section 5.2) |
+| Channel | One way out for a released response, served by one outtake adapter, such as `email` or `manual` |
+| Spool | An SFTP-only folder on an adapter's own host. The core servers collect from it and deliver to it |
 | Intake folder | Where every request enters the pipeline |
 | Drop | One request as an adapter leaves it in the intake folder: a `request.json` file and the files it lists |
 | Evidence store | Protected storage on the external network holding unchanged originals |
@@ -156,7 +158,7 @@ Each requirement has an ID that stays the same when this document changes. The s
 | SR-08 | Import and export use different DMZ hosts, accounts, keys and storage |
 | SR-09 | A valid signature never exempts a file from sanitization, unless the passthrough (section 3.6) has been activated |
 | SR-10 | Administrative access is separate from data flows and is logged |
-| SR-11 | Adapters reach only their own folders, and have no access to keys, the database or evidence |
+| SR-11 | Adapters reach only their own folders, and have no access to keys, the database or evidence. An adapter host cannot open a connection to a core server |
 | SR-12 | A decrypted response reaches the outtake folder only after an authorized release |
 | SR-13 | A signed response must be the approved PDF with only signature data added |
 | SR-14 | Decrypted responses never reach a validator that parses hostile files |
@@ -566,14 +568,14 @@ When an officer starts a release, `ext-release` decrypts the response and runs t
 
 Release rules:
 
-- The console suggests the original sender, but the officer can choose another recipient.
-- A recipient different from the original sender needs a written reason. Domains listed in `SECOND_APPROVAL_DOMAINS`, or any domain when the list is `*`, also need a second approver.
+- The officer chooses a channel from the channel registry (section 5.2) and a recipient in that channel's format. The console suggests the reply hint of the request, which for mail is the original sender.
+- A recipient different from the suggestion needs a written reason. Each channel also has its own second-approval rule. For email, domains listed in `SECOND_APPROVAL_DOMAINS`, or any domain when the list is `*`, need a second approver.
 - Sensitive responses always need a second approver.
-- Sensitive responses use the manual channel until recipient encryption exists (section 11.2). `SENSITIVE_ALLOW_EMAIL` defaults to `false`.
+- Sensitive responses use only channels that the registry allows for them. In the MVP that is the manual channel, until recipient encryption exists (section 11.2). `SENSITIVE_ALLOW_EMAIL` defaults to `false`.
 - The file is delivered byte for byte. The officer cannot edit it on the external network. A correction is a new version from the internal side, and it supersedes any unreleased version.
 - A release closes the request on the external side, and the `released` status closes it on the internal side. A correction after release needs a new request.
 - The release service writes the file and `delivery.json` to the outtake folder for the chosen channel.
-- In the MVP, the mail adapter uses a fixed template, and `In-Reply-To` comes from the stored original message.
+- In the MVP, the mail adapter uses a fixed template, and `In-Reply-To` comes from the stored original message, through `channel_data`.
 - The adapter compares the file hash with `delivery.json` immediately before delivery.
 
 Delivery status stays on the external network. Only an enumerated status (`released`, `expired`, `bounced`) goes to the internal side, as a `status` package with no free text.
@@ -710,7 +712,7 @@ The POC runs the two sanitizers in VMs and everything else in Docker containers 
 
 **`ext-egress`**. Squid proxy that allows only trust lists, OCSP, CRL, timestamp hosts and ClamAV updates (appendix E.4). The only outbound path for trust data. Holds no keys. Connections: F5, F10, F13 in; F6 out.
 
-**`ext-mail-adapter`** (MVP). Fetches mail over IMAP (M1) and sends released responses over SMTP (M2). No keys, no database; shares only the intake and outtake folders (section 5.2).
+**`ext-mail-adapter`** (MVP). Fetches mail over IMAP (M1) and sends released responses over SMTP (M2). It runs on its own host with a spool (section 5.2): `ext-app` collects its drops and `ext-release` delivers to it (A1, A2). No keys, no database, and no connection to `ext-core` or `ext-release`.
 
 **DMZ**
 
@@ -814,18 +816,22 @@ The matrix names hosts, so it says `ext-core` for `ext-app` and `ext-postgres`. 
 
 In the POC, the two console ports are published only on the Docker host's loopback address. In the MVP, the zone firewall allows F1 only from the wired campus network, and not from the internet or any other network.
 
-The MVP adds these flows for the mail adapter:
+The MVP adds these flows. A1 and A2 apply to every adapter that runs on its own host, and the mail adapter is the first. M1 and M2 are the mail adapter's own flows to the outside:
 
 | ID | Source | Destination | Port | Purpose |
 | --- | --- | --- | --- | --- |
+| A1 | `ext-core` | Adapter host | 22 | Collect drops from the spool |
+| A2 | `ext-release` | Adapter host | 22 | Deliver items to the spool, collect results |
 | M1 | `ext-mail-adapter` | Mail server | 993 | Fetch mail |
 | M2 | `ext-mail-adapter` | Mail relay | 587 | Send released responses |
 
-### 5.2 Intake and outtake folders
+### 5.2 Intake and outtake adapters
 
-The pipeline starts at a folder and ends at a folder. It does not know where a request came from or how a response leaves, so a new adapter does not change the pipeline.
+The pipeline starts at a folder and ends at a folder. It does not know where a request came from or how a response leaves. An adapter is anything that puts a request into the intake folder or takes a released response out of the outtake folder. Mail is one adapter of each kind. A new adapter does not change the pipeline (FR-16).
 
-The intake folder sits on `ext-core` and the outtake folder on `ext-release`. Neither is a network share. They replace only the outer edges of the system. Sanitization, the DMZ transfer, approvals and human release are unchanged.
+Every adapter follows the same three small formats: a drop on the way in, and a delivery item and a result on the way out. Sanitization, the DMZ transfer, approvals and human release are the same for all of them.
+
+**Folders.** The intake folder sits on `ext-core` and the outtake folder on `ext-release`. Neither is a network share.
 
 ```text
 /srv/dxg/intake/
@@ -840,11 +846,55 @@ The intake folder sits on `ext-core` and the outtake folder on `ext-release`. Ne
   results/<release-id>.json       Delivery result written by the adapter
 ```
 
-Possible intake adapters are the `dxg-drop` script (POC), mail over IMAP (MVP), manual upload by an operator, an rsync or SFTP drop, an HTTP API, a web upload portal, a watched network share, and a network scanner or printer.
+**How an adapter attaches.** There are two ways, and the formats are the same in both.
 
-Possible outtake adapters are collecting the file from the folder (POC), mail over SMTP (MVP), manual download by an authorized user, an rsync or SFTP push, an HTTP API or webhook call, a web download portal, and a network share.
+| Way | Where the adapter runs | Use it for |
+| --- | --- | --- |
+| Local | On the folder's host, under its own service account. It reads or writes the folder directly | Adapters that touch no other network: the `dxg-drop` script, manual collection |
+| Spool | On its own host. The host has an SFTP-only spool, built like a DMZ host (appendix E.5) | Any adapter that connects to another network, such as mail, an upload portal or an HTTP API |
 
-**Intake drop.** In the POC, `dxg-drop` plays the adapter role. An adapter writes `request.json` and `files/` to `.incoming/<request-id>/`, then renames the directory into `ready/`. The mail adapter drops the raw message unchanged, so hostile mail is still parsed only on `ext-sanitizer`.
+With a spool, the core servers do all the collecting and delivering:
+
+- `ext-app` collects complete drops from the spool and places them in the intake folder (flow A1).
+- `ext-release` uploads each delivery item for that channel from the outtake folder to the spool, deletes its local copy, and collects the result (flow A2).
+- The adapter host cannot open a connection to `ext-core` or `ext-release`. It holds no keys and has no database access.
+- The transfer rules are those of the DMZ hosts: upload under a temporary name, rename when complete, and the receiver deletes after it has checked the size and hash.
+
+```text
+/srv/spool/
+  in/<request-id>/                Complete drops, collected by ext-app
+  out/<release-id>/               Delivery items, uploaded by ext-release. On tmpfs
+  results/<release-id>.json       Delivery results, collected by ext-release
+```
+
+**Channels.** A channel is one way out. Each has one entry in the channel registry, which is configuration on the external side:
+
+| Field | Meaning |
+| --- | --- |
+| Name | Used in `delivery.json` and in the outtake folder path |
+| Attachment | Local, or the spool host |
+| Recipient format | What a recipient must look like in this channel, such as an email address. The console checks it |
+| Sensitive allowed | Whether the channel may carry a response marked `sensitive` |
+| Second-approval rule | When a release through this channel needs a second approver, in addition to the rules in section 3.5 |
+| Channel data | The extra fields this channel's adapter needs, such as a mail subject. No other field is accepted |
+
+An intake adapter has a shorter entry: its name, and its account or spool.
+
+Adapters and channels in the POC and MVP:
+
+| Adapter | Direction | Attachment | Recipient format | Sensitive allowed | Second-approval rule | Channel data |
+| --- | --- | --- | --- | --- | --- | --- |
+| `dxg-drop` (POC) | In | Local | | | | |
+| `manual` | Out | Local | Name of the person who collects the file | Yes | None | None |
+| `mail` (MVP) | In | Spool on `ext-mail-adapter` | | | | |
+| `email` (MVP) | Out | Spool on `ext-mail-adapter` | Email address | `SENSITIVE_ALLOW_EMAIL`, default `false` | Domains in `SECOND_APPROVAL_DOMAINS`, or every domain when the list is `*` | `subject`, `reply_to_message_id` |
+
+Adapters that fit the same interface later, and are not built in the MVP:
+
+- **In:** manual upload by an operator, an rsync or SFTP drop, an HTTP API, a web upload portal, a watched network share, and a network scanner or printer.
+- **Out:** manual download by an authorized user, an rsync or SFTP push, an HTTP API or webhook call, a web download portal, and a network share.
+
+**Intake drop.** An adapter writes `request.json` and `files/` to `.incoming/<request-id>/`, then renames the directory into `ready/`. On a spool, it does the same under `in/`. In the POC, `dxg-drop` plays the adapter role.
 
 ```json
 {
@@ -864,18 +914,22 @@ Possible outtake adapters are collecting the file from the folder (POC), mail ov
 }
 ```
 
-`kind` is `raw_mail` or `attachment`. Adapters that do not supply a raw message may add `sender` and `subject`. For mail, `source.reference` holds `UIDVALIDITY:UID`, and the mail adapter moves a message to a processed folder only after its drop reaches `ready/`.
+- `kind` is `file` or `raw_mail`. A raw mail message is a file kind that the pipeline unpacks on `ext-sanitizer`, in the same way as a ZIP. Any adapter may drop one, and the mail adapter drops the message unchanged, so hostile mail is still parsed only on `ext-sanitizer`.
+- `source.reference` is the adapter's own ID for the submission, and must be unique for that adapter. For mail it holds `UIDVALIDITY:UID`, and the mail adapter moves a message to a processed folder only after its drop is complete.
+- An adapter that does not supply a raw message may add `sender` and `subject`.
+- An adapter may add `reply_hint`, with a `channel` and a `recipient`, to suggest where a response could go. For raw mail, the pipeline takes the suggestion from the parsed message instead.
 
 The intake worker renames a drop into `processing/` and then checks it, in this order:
 
 1. The directory name is a UUID that matches `request_id`.
 2. The drop contains only regular files, with no links or extra entries.
 3. `request.json` is within its size limit and matches the schema.
-4. Listed files match the directory contents, sizes and SHA-256 hashes.
-5. Total size is within `MAX_DROP_BYTES`.
-6. `source.adapter` and `source.reference` have not been seen before.
+4. `source.adapter` is a registered intake adapter, and the drop arrived through that adapter's account or spool.
+5. Listed files match the directory contents, sizes and SHA-256 hashes.
+6. Total size is within `MAX_DROP_BYTES`.
+7. `source.adapter` and `source.reference` have not been seen before.
 
-A failed drop moves to `rejected/` and raises an alert. A valid drop is copied to the evidence store and removed from the intake folder. Values in `request.json` remain untrusted text.
+A failed drop moves to `rejected/` and raises an alert. A valid drop is copied to the evidence store and removed from the intake folder. Values in `request.json` remain untrusted text, including `reply_hint`.
 
 **Outtake item.** The release service writes the file and `delivery.json` after a release is authorized, then renames the directory into the channel's `ready/` folder.
 
@@ -886,14 +940,18 @@ A failed drop moves to `rejected/` and raises an alert. A valid drop is copied t
   "request_id": "0195f7a2-6f7e-7c1a-9a44-1b1f4c2e7d10",
   "channel": "email",
   "recipient": "person@example.org",
-  "subject": "Response to your request",
-  "reply_to_message_id": "<original@example.org>",
   "file": "signed.pdf",
   "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
   "bytes": 202144,
-  "expires_at": "2026-11-04T12:00:00Z"
+  "expires_at": "2026-11-04T12:00:00Z",
+  "channel_data": {
+    "subject": "Response to your request",
+    "reply_to_message_id": "<original@example.org>"
+  }
 }
 ```
+
+The fields above `channel_data` are the same for every channel. `channel_data` holds only the fields that the channel's registry entry lists, and only that channel's adapter reads them.
 
 The adapter checks `expires_at` and the file hash, delivers the file, writes a result, and deletes the item.
 
@@ -907,14 +965,24 @@ The adapter checks `expires_at` and the file hash, delivers the file, writes a r
 }
 ```
 
-`result` is `delivered` or `failed`. Rules for all adapters:
+`result` is `delivered` or `failed`. `reference` is the adapter's own proof of delivery, as text.
+
+**Rules for all adapters**
 
 - Adapters run as separate service accounts, and each outtake adapter reads only its own channel.
 - Adapters have no access to package keys, the database or the evidence store.
-- Only the release service writes to the outtake folder, and only after an authorized release.
+- An adapter that connects to another network runs on its own host with a spool. It never runs on `ext-core` or `ext-release`.
+- Only the release service writes to the outtake folder and to a spool's `out/` folder, and only after an authorized release.
 - `delivery.json` never comes from the internal network.
-- In the MVP, outtake is a tmpfs mount, because it holds decrypted responses. Items older than `OUTTAKE_MAX_MINUTES` are deleted and the release moves to `failed`.
+- In the MVP, the outtake folder and every spool's `out/` folder are tmpfs mounts, because they hold decrypted responses. Items older than `OUTTAKE_MAX_MINUTES` are deleted and the release moves to `failed`.
 - A watched network share is an adapter that copies files in. It is never the intake folder itself.
+
+**Adding an adapter** takes four things and no change to the pipeline:
+
+1. A registry entry.
+2. A service account on the folder's host, or a spool host with flows A1 and A2 for it in the flow matrix.
+3. Any flows of its own to the outside, like M1 and M2 for mail.
+4. The adapter tests for it: T-12 to T-16 and T-18 for intake, T-43 and T-44 for outtake, and T-47 for a spool host.
 
 ## 6. Threat model and limitations
 
@@ -935,7 +1003,7 @@ Section 6.1 lists what can go wrong and what limits the damage. Section 6.2 list
 | Compromised internal system sets a recipient | Schema has no recipient field, and the external side chooses the recipient | None for address selection |
 | Compromised external workstation | Server-side send, MFA, second approver | Workstation can mislead its own user, and manual downloads expose plaintext |
 | Altered response after approval | Append and page content checks on the internal side, prefix and signature checks at release | A signature appearance can carry a small amount of hidden data, within the size limit |
-| Compromised or faulty adapter | Separate accounts, strict drop validation, no access to keys or evidence | Adapter can submit unwanted requests, and can read its own outtake channel |
+| Compromised or faulty adapter | Separate accounts or a separate host, strict drop validation, no access to keys or evidence, no connection to the core servers | Adapter can submit unwanted requests, and can read its own outtake channel |
 | Replay or reordering | Unique package IDs, per-direction sequence numbers | Delay is possible |
 | SSH client attack from DMZ | The client that downloads from the DMZ runs on `int-verifier`, which has no console, database or response signing key. `int-app` only uploads. Minimal SFTP client, patching | Residual risk until a hardware diode replaces the path |
 | Compromised `int-verifier` | No console, database or response signing key, one outbound flow, output read by `int-app` with a strict reader | Attacker can read import payloads, and can hand `int-app` a forged document that users then open |
@@ -1155,6 +1223,7 @@ Keep hostile samples in a controlled store on the external network only.
 | T-15 | Drop with a wrong size or hash | Moved to `rejected/` |
 | T-16 | Same `source.reference` submitted twice | Second drop rejected |
 | T-17 | MVP: same document through `dxg-drop` and the mail adapter | Same screening result |
+| T-18 | Drop whose `source.adapter` is not registered, or that arrives through another adapter's account or spool | Moved to `rejected/`, and alert raised |
 
 ### 10.2 Signature tests
 
@@ -1225,6 +1294,7 @@ Keep hostile samples in a controlled store on the external network only.
 | T-56 | Largest expected file and peak daily volume | Queue clears within the agreed time |
 | T-57 | Connection from `int-verifier` to anything other than `dmz-import`, and from `dmz-import` to `int-core` | Blocked and logged |
 | T-59 | Connection to the external console from any address outside the wired campus network | Blocked and logged |
+| T-47 | Connection from an adapter host to `ext-core` or `ext-release` | Blocked and logged |
 
 ### 10.7 MVP acceptance criteria
 
@@ -1240,11 +1310,11 @@ Keep hostile samples in a controlled store on the external network only.
 
 | Phase | Build | Exit criteria |
 | --- | --- | --- |
-| 1. Import POC | Intake folder, `dxg-drop`, agent, screening, Dangerzone, basic console, DMZ transfer, `int-verifier` | T-01 to T-16, T-30 to T-36, T-45 and T-58 pass |
+| 1. Import POC | Intake folder, `dxg-drop`, agent, screening, Dangerzone, basic console, DMZ transfer, `int-verifier` | T-01 to T-16, T-18, T-30 to T-36, T-45 and T-58 pass |
 | 2. Signed PDFs | DSS, strict policy, evidence store, reports, review flow | T-20 to T-27 and T-46 pass |
 | 3. Response path | Internal workflow, flattening, DLP rules, approvals, PDF signing upload, `int-validator`, package signing and encryption | T-37, T-38 and T-61 to T-63 pass |
 | 4. Release console | Queue, policy rules, second approval, `ext-release`, outtake folder | T-39 to T-44, T-60 and T-64 to T-69 pass |
-| 5. Hardening | Move from Docker to VMs, add the mail adapter, monitoring, backups, access review, procedures, separate hardware | T-17, T-50 to T-57 and T-59 pass |
+| 5. Hardening | Move from Docker to VMs, add the mail adapter, monitoring, backups, access review, procedures, separate hardware | T-17, T-47, T-50 to T-57 and T-59 pass |
 | 6. MVP sign-off | Independent penetration test and fixes | Section 10.7 met |
 | Optional | Signed PDF passthrough, then return, only after an activation decision | Section 9 of the [passthrough design](document-exchange-signed-pdf-passthrough.md) met |
 
@@ -1268,7 +1338,7 @@ Phases 1 to 5 also answer these questions, which the design review left for the 
 | Editable spreadsheet data | Extract values in the sandbox, and write a new XLSX with cells stored as text |
 | `.p7m`, `.p7s`, ASiC | Validate with DSS, extract content, and sanitize the extracted files |
 | Recipient encryption | S/MIME for known recipients, or a secure download portal |
-| More adapters | Add any option from section 5.2. Each one only reads or writes a folder |
+| More adapters | Add any option from section 5.2, by the four steps at the end of that section. Each one only reads or writes a folder or a spool |
 | More formats | Enable 7z and RAR through libarchive with the ZIP rules, render CSV to PDF, and enable other Dangerzone formats |
 | Hardware key protection | PKCS#11 tokens or HSM for release and signing keys |
 | High availability | Replicated database and multiple workers after volume justifies it |
@@ -1313,7 +1383,7 @@ High:
 1. **The append check covers only content streams** (appendix F.2). An update that replaces a page image or `/Resources` passes, and DSS does not see changes made in the signing update itself. This weakens SR-13.
 2. **The allowlist PDF check is not written.** `int-verifier` must accept only the structure that Dangerzone produces (appendix D.5, T-58), but `pdf_policy.py` is still a denylist (appendix F.1). Until the allowlist exists, a compromised external host could send a PDF with a hostile font or image and no forbidden key. Write the allowlist from real Dangerzone output in phase 1.
 3. **Timestamp access is unresolved** (section 3.4). The DMZ proxy is an exception to rule 2 in section 1.1, and the internal timestamp authority in section 6 of the [passthrough design](document-exchange-signed-pdf-passthrough.md) would not meet `REQUIRE_QUALIFIED_TIMESTAMP`. The "signed after approval" check also needs a reliable internal clock.
-4. **The MVP mail adapter has no settled place.** Section 5.2 says the folders are not network shares and appendix E.8 makes the adapter a separate component, but appendix E.7 creates its user on `ext-core`. The adapter also needs the outtake folder, which is on `ext-release` in the MVP, so it reads folders on two hosts.
+4. Closed. The mail adapter runs on its own host with a spool, and the core servers collect from it and deliver to it (section 5.2).
 
 Medium:
 
@@ -1325,9 +1395,9 @@ Medium:
 10. Mail handling skips S/MIME, attached messages, `winmail.dat`, `.pptx`, `.rtf`, `.heic` and inline images, shows no SPF, DKIM or DMARC result, and does not say whether the suggested recipient is From or Reply-To.
 11. The `bounced` status has no source and no matching internal state.
 12. Maintenance imports into the internal network (trust-list snapshots, Dangerzone templates, OS patches) have no design.
-13. `deploy/ext-core/setup-folders.sh` still creates the outtake folder and the `dxg-release` user on `ext-core`, and gives `dxg-web` access to the outtake folder. For the MVP, the outtake part must move to a script for the `ext-release` VM, without `dxg-web`.
+13. `deploy/ext-core/setup-folders.sh` still creates the outtake folder and the `dxg-release` user on `ext-core`, gives `dxg-web` access to the outtake folder, and creates a local `dxg-mail` user. For the MVP, the outtake part must move to a script for the `ext-release` VM, without `dxg-web`, and the mail adapter needs a spool host script in place of the local user.
 14. The flow matrix (section 5.1) has no flows for log shipping, backups, time synchronisation, administrative access, name resolution for `ext-egress`, or operating system patches for the external hosts. SR-10 has a described control only for the DMZ hosts (appendix E.5). The "signed after approval" check and every certificate check need correct clocks. `ext-core` collects DMZ logs over SFTP, but nothing says how logs reach the `/srv/xfer` folder that the SFTP accounts are confined to.
-15. Delivery results are written inside the outtake folder, which is a tmpfs (section 5.2). If the host restarts after the adapter delivered a response and before `ext-release` recorded the result, the release moves to `failed`, and a retry sends the response twice. Keeping `results/` on disk would fix this, because a result holds no document content.
+15. Delivery results are written inside the outtake folder, or beside a spool's `out/` folder, and the outtake folder is a tmpfs (section 5.2). If the host restarts after the adapter delivered a response and before `ext-release` recorded the result, the release moves to `failed`, and a retry sends the response twice. Keeping `results/` on disk would fix this, because a result holds no document content.
 16. Section 3.3 always extracts the signed revision of an incoming signed PDF. DSS returns no document when the signature is in the first revision of the file, and that case has no path.
 17. `scripts/verify-envelope.sh` compares `payload_sha256` but not `payload_bytes` (section 8.4, step 6), and it fails on `ack` and `status` packages, which have no payload.
 18. `ext-app` and `int-app` join only internal Docker networks, and Docker does not publish ports for such containers. The console ports in the Compose file will probably not be reachable. A small reverse proxy on a second network is one fix.
@@ -1569,6 +1639,7 @@ For the POC, start with 8 vCPU, 16 GiB RAM and 200 GiB disk for the Docker conta
 | `ext-validator` | 2 | 4 GiB | 40 GiB |
 | `ext-response-validator` | 2 | 4 GiB | 40 GiB |
 | `ext-egress` | 1 | 1 GiB | 20 GiB |
+| `ext-mail-adapter` | 1 | 1 GiB | 20 GiB |
 | `dmz-import`, `dmz-export` | 1 each | 1 GiB each | 100 GiB each |
 | `int-core` | 4 | 8 GiB | 200 GiB |
 | `int-verifier` | 2 | 4 GiB | 100 GiB |
@@ -1657,6 +1728,7 @@ Implementation rules for these permissions:
 - Adapters run with `umask 0007`. Otherwise, the pipeline cannot move a drop into `processing/`.
 - The release service sets an item's group to the channel group before the final rename. Otherwise, the adapter cannot read the file.
 - Keep all outtake subfolders on one mount, so that the final rename is atomic.
+- These accounts are for local adapters. An adapter on its own host uses a spool instead, set up like a DMZ host (appendix E.5), with one SFTP account for `ext-core` and one for `ext-release`.
 - For the POC, adapters share the intake folders. Use one `.incoming` folder per adapter if you need stricter separation.
 
 ### E.8 POC deployment with Docker
@@ -1718,7 +1790,7 @@ Script: [`checks/signature_append_check.py`](checks/signature_append_check.py).
 | Sanitizer VMs attached to Docker bridges | **Not tested** |
 | Folder setup script | Executed as root, and tested with intake, outtake and channel-separation scenarios, without the tmpfs mount |
 | Diagrams | Embedded as Mermaid blocks in this file. All blocks rendered without errors with mermaid-cli 11.4.2 |
-| SQL for both networks | Applied to PostgreSQL 16. The renamed statuses, the nullable internal `subject` and the unique `previous_hash` were added later and **not applied** |
+| SQL for both networks | Applied to PostgreSQL 16. The renamed statuses, the nullable internal `subject`, the unique `previous_hash` and the `reply_hint` and `channel_data` columns were added later and **not applied** |
 | `pdf_policy.py` | Executed against clean PDFs, real signed PDFs, and PDFs with JavaScript, links, attachments, launch actions and signature locks |
 | `signature_append_check.py` | Executed with visible, invisible, certified, second and timestamped signatures, and with altered, rewritten, unsigned, timestamp-only and oversized files |
 | nftables ruleset | Checked with `nft -c` |
@@ -1726,7 +1798,7 @@ Script: [`checks/signature_append_check.py`](checks/signature_append_check.py).
 | Dangerzone CLI options and exit codes | Read from the 0.11.1 source and documentation, **not executed** |
 | DSS REST paths, fields and signed-revision behavior | Read from DSS 6.5.1 source, **not executed**, because the build dependencies could not be downloaded in the test environment |
 | `sshd_config`, Squid guidance, tmpfs mount and host sizing | **Not tested** |
-| Adapters and the intake worker | Specified only, **not built** |
+| Adapters, adapter spools, the channel registry and the intake worker | Specified only, **not built** |
 | `int-verifier` and its commands | Specified only, **not built** |
 | `ext-release` on its own host, with flows F16 and F17 | Specified only, **not built** |
 | Signed PDFs from other signing software | **Not tested**. Test signatures came from one library only |

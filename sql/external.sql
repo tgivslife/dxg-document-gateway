@@ -5,6 +5,7 @@ CREATE TABLE requests (
     message_id      text,
     sender          text,
     subject         text,
+    reply_hint      jsonb,
     drop_sha256     char(64) NOT NULL,
     evidence_path   text NOT NULL,
     status          text NOT NULL CHECK (status IN (
@@ -93,6 +94,7 @@ CREATE TABLE releases (
     response_id     uuid NOT NULL REFERENCES responses(id),
     channel         text NOT NULL,
     recipient       text NOT NULL,
+    channel_data    jsonb NOT NULL DEFAULT '{}',
     reason          text,
     created_by      text NOT NULL,
     approved_by     text,

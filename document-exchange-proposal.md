@@ -17,10 +17,13 @@ The solution must:
 - Send each response as a PDF with a qualified electronic signature or seal and a trusted timestamp, unchanged after approval.
 - Let the internal network approve what a response says, and let the external network choose who receives it.
 - Record every decision against the request, from the original email to the delivered response.
+- Accept other ways in and out later, such as an upload portal, without rebuilding the pipeline. Email is the first.
 
 ## How it works
 
 The two networks never connect to each other. Both connect out to two small transfer servers in a DMZ, one per direction, and exchange signed, encrypted packages through them. In the diagram, each arrow points from the side that opens the connection.
+
+The pipeline itself starts at an intake folder and ends at an outtake folder, and does not know about mail. Mail is the first adapter at each end. Another way in or out, such as an upload portal, is a new adapter with the same small interface.
 
 ```mermaid
 flowchart TB
@@ -41,7 +44,7 @@ flowchart TB
     subgraph EXT["External network"]
         CORE["<b>ext-app</b><br/>Console and workflow.<br/>Reachable from the wired<br/>campus network only."]
         REL["<b>ext-release</b><br/>Decrypts a response at release.<br/>Own server, holds the release key."]
-        ADAPTER["<b>Mail adapter (MVP)</b><br/>Fetches and sends mail.<br/>Hands files to ext-app."]
+        ADAPTER["<b>Mail adapter (MVP)</b><br/>Fetches and sends mail.<br/>Own server, cannot connect<br/>to ext-app or ext-release."]
         SAN[["<b>ext-sanitizer VM</b><br/>Opens untrusted files,<br/>flattens them to PDF.<br/>No keys, no network."]]
         VAL["<b>Signature validators</b><br/>EU DSS, two instances.<br/>Internet only via a proxy"]
     end
@@ -61,8 +64,8 @@ flowchart TB
     CORE --> EXP
     CORE --> SAN
     CORE --> VAL
-    ADAPTER -. "intake folder" .- CORE
-    ADAPTER -. "outtake folder" .- REL
+    CORE -->|"collects requests"| ADAPTER
+    REL -->|"delivers responses"| ADAPTER
     CORE --> REL
     REL --> VAL
     ADAPTER --> MAIL
@@ -131,7 +134,7 @@ Each part does one job, and the parts that open untrusted files hold no keys and
 | ext-validator | External, isolated | Validates signatures on incoming signed PDFs against the EU trusted lists. | EU DSS |
 | ext-response-validator | External, isolated | Checks the qualified signature and timestamp of each response at release. Never sees files from the internet. | EU DSS |
 | ext-egress | External | The validators' only way out. Allows trust lists, revocation checks, timestamps and antivirus updates, and denies everything else. | Squid proxy |
-| ext-mail-adapter (MVP) | External | Fetches mail and sends released responses. No keys and no database access. | IMAP and SMTP client |
+| ext-mail-adapter (MVP) | External, own server | Fetches mail and sends released responses. No keys and no database access. ext-app collects requests from it and ext-release delivers responses to it, so it never connects to them. | IMAP and SMTP client |
 | dmz-import, dmz-export | DMZ | One transfer server per direction. Holds only signed, encrypted packages until the other side collects them. | OpenSSH in file-transfer-only mode, nftables firewall |
 | int-verifier | Internal, isolated | The only internal part that connects to dmz-import. Collects packages, verifies and decrypts them, and checks every PDF before int-app sees it. Holds the import decryption key. No console, no database, no response signing key. | Small agent, OpenSSL, PDF checks |
 | int-app | Internal | Console for internal users. Stores verified documents, runs drafting, approval, signing upload and DLP checks, and builds response packages. Holds the response signing key. | Laravel and Vue web app, OpenSSL |
@@ -187,7 +190,7 @@ Five risks remain by design. A design review also found a number of open issues.
 | The check that only a signature was added compares page drawing commands. A flattened page draws an image stored elsewhere, so that image could be swapped during signing. | Compare the rendered pages, or allow the signing step to add signature objects only. |
 | The internal network checks incoming PDFs against a list of forbidden features. A hostile font or image could pass if the external side were compromised. | The verifier will accept only the exact structure Dangerzone produces. This check is written in phase 1, from real Dangerzone output. |
 | Signers on the internal network need a trusted timestamp, but the internal network has no route out. | A security decision, listed below. |
-| Where the MVP mail adapter runs is not settled, and it reaches the internet. | Run it on its own host that shares only the intake and outtake folders. |
+| Where the MVP mail adapter runs was not settled, and it reaches the internet. | Settled. It runs on its own server, which cannot connect to the core servers. They collect from it and deliver to it. |
 
 ## Plan
 
