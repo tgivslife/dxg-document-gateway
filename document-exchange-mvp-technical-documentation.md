@@ -9,7 +9,7 @@
 | Working name | DXG (Document Exchange Gateway) |
 | Audience | Developers, infrastructure engineers, security reviewers |
 
-Sections 1 to 3 explain what DXG does and what each part is. Sections 4 to 12 hold the detailed design. The appendices hold settings, interfaces and deployment details, and link to the code and configuration files kept next to this document in `checks/`, `scripts/`, `sql/`, `schemas/`, `examples/`, `poc/` and `deploy/`. For a short overview for decision makers, read the [proposal](document-exchange-proposal.md).
+Sections 1 to 4 explain what DXG must do, how it works and what each part is. Sections 5 to 12 hold the detailed design. The appendices hold settings, interfaces and deployment details, and link to the code and configuration files kept next to this document in `checks/`, `scripts/`, `sql/`, `schemas/`, `examples/`, `poc/` and `deploy/`. For a short overview for decision makers, read the [proposal](document-exchange-proposal.md).
 
 ## 1. Overview
 
@@ -23,7 +23,7 @@ The design has three rules:
 2. **The internal network never connects to the internet or directly to the external network.** The two networks exchange signed, encrypted packages through a DMZ, and the internal network opens all connections on its side.
 3. **Each direction has its own owner.** The internal side approves the content of a response. A user on the external side chooses the recipient and channel.
 
-Section 12 defines one optional exception for incoming signed PDFs. It is disabled by default and needs a written risk acceptance.
+Section 3.6 defines one optional exception for incoming signed PDFs. It is disabled by default and needs a written risk acceptance.
 
 ### 1.2 Scope
 
@@ -35,8 +35,8 @@ Section 12 defines one optional exception for incoming signed PDFs. It is disabl
 | TXT normalization and safe ZIP unpacking | RAR, 7z and other archive formats |
 | PAdES validation with EU DSS | Validation of `.p7m`, `.p7s` and ASiC files |
 | Evidence store for originals on the external network | Long-term archival preservation |
-| Signed and encrypted packages in both directions | Hardware diode (kept as an upgrade path, section 11) |
-| Digitally signed PDF responses, with approval, DLP rules and flattening before signing | Passthrough of incoming signed PDFs for further signing, designed but disabled (section 12) |
+| Signed and encrypted packages in both directions | Hardware diode (kept as an upgrade path, section 11.2) |
+| Digitally signed PDF responses, with approval, DLP rules and flattening before signing | Passthrough of incoming signed PDFs for further signing, designed but disabled (section 3.6) |
 | Release console on the external network, with delivery through the outtake folder | Recipient encryption and secure download portal |
 | Audit trail linked to a request ID | High availability |
 
@@ -44,12 +44,12 @@ Section 12 defines one optional exception for incoming signed PDFs. It is disabl
 
 - The internal network is not classified or formally accredited. If it is, the accrediting authority decides the architecture before implementation starts.
 - PDF output is acceptable for documents that arrive as Word or Excel files.
-- Volume is low to medium. This must be measured during the POC (section 9.4).
-- The organization can run an internal CA, or issue the certificates in section 3.4.
+- Volume is low to medium. This must be measured during the POC (section 10.6).
+- The organization can run an internal CA, or issue the certificates in section 4.4.
 - Signers use a qualified certificate, a trusted timestamp, and a tool that saves signatures incrementally.
-- The signing tool can reach a timestamp service from the internal network (section 2.4).
+- The signing tool can reach a timestamp service from the internal network (section 3.4).
 - The POC uses test data only, on one Docker host.
-- For the MVP, network teams can enforce the flow matrix in section 4.1 at a firewall that neither network administers.
+- For the MVP, network teams can enforce the flow matrix in section 5.1 at a firewall that neither network administers.
 
 ### 1.4 Terms
 
@@ -67,7 +67,7 @@ Section 12 defines one optional exception for incoming signed PDFs. It is disabl
 | Intake folder | Where every request enters the pipeline |
 | Outtake folder | Where every released response leaves the pipeline |
 | Base PDF | The approved, flattened PDF that a signer signs |
-| Passthrough | The optional transfer of an incoming signed PDF without flattening (section 12) |
+| Passthrough | The optional transfer of an incoming signed PDF without flattening (section 3.6) |
 | CDR | Content disarm and reconstruction |
 | DLP | Data loss prevention |
 | PAdES | PDF Advanced Electronic Signatures |
@@ -77,16 +77,60 @@ Section 12 defines one optional exception for incoming signed PDFs. It is disabl
 | VM | A separate virtual machine, used for the sanitizers in the POC and for everything in the MVP. The MVP may use a physical server instead |
 | DMZ | A separate network zone between the two networks. It holds only packages |
 | POC, MVP | Proof of concept on test data, and the minimum viable product for real use |
-| DSS | The European Commission's Digital Signature Service, used to validate signatures (section 3.3) |
+| DSS | The European Commission's Digital Signature Service, used to validate signatures (section 4.3) |
 | QES, `QESig` | Qualified electronic signature, the highest level of electronic signature under eIDAS |
 | OCSP, CRL | Online certificate status checks and certificate revocation lists |
 | TSA | Timestamp authority |
 | OCR | Optical character recognition, which adds a text layer to a flattened PDF |
 | SFTP | File transfer over SSH |
 
-## 2. How it works
+## 2. Requirements
 
-### 2.1 At a glance
+### 2.1 Functional requirements
+
+| ID | Requirement |
+| --- | --- |
+| FR-01 | Accept requests only through the intake folder, and store each original unchanged |
+| FR-02 | Reject executable, script and other disallowed content without operator action |
+| FR-03 | Let an operator choose which allowed items go to the internal network, using metadata only |
+| FR-04 | Flatten selected documents to PDF, and normalize text files |
+| FR-05 | Unpack ZIP files within limits, and treat each file as a separate item |
+| FR-06 | Validate digitally signed PDFs before sanitization, and keep the original as evidence |
+| FR-07 | Give the internal side a sanitized copy, a signature status and an ETSI validation report |
+| FR-08 | Let a user on the internal network create a response linked to an open request, and have it digitally signed as a PDF |
+| FR-09 | Require a different user on the internal network to approve each response |
+| FR-10 | Deliver approved responses to a release queue on the external network without sending them automatically |
+| FR-11 | Let an authorized user on the external network choose the recipient and channel for each response |
+| FR-12 | Require a second approver on the external network for sensitive responses and for recipient exceptions that policy marks |
+| FR-13 | Support a corrected response only as a new signed version created on the internal network |
+| FR-14 | Record every decision against the request ID |
+| FR-15 | Deliver released responses only through the outtake folder |
+| FR-16 | Support new adapters without changing the pipeline |
+| FR-17 | Provide passthrough of incoming signed PDFs, and their return, as optional features disabled by default |
+| FR-18 | Deliver every response as a PDF signed with a qualified certificate and a trusted timestamp, byte for byte, with its signatures intact |
+
+### 2.2 Security requirements
+
+| ID | Requirement |
+| --- | --- |
+| SR-01 | No direct network path exists between the external and internal networks, and nothing in the DMZ or on the external network can open a connection into the internal network |
+| SR-02 | Untrusted files are parsed only in isolated hosts with no general network access |
+| SR-03 | Every package is signed by the sending side and verified by the receiving side |
+| SR-04 | Document payloads are encrypted while in the DMZ |
+| SR-05 | The internal side cannot set a recipient, subject, or mail header |
+| SR-06 | The external side cannot alter a response without detection |
+| SR-07 | Replayed or out-of-sequence packages are rejected and raise an alert |
+| SR-08 | Import and export use different DMZ hosts, accounts, keys and storage |
+| SR-09 | A valid signature never exempts a file from sanitization, unless the passthrough (section 3.6) has been activated |
+| SR-10 | Administrative access is separate from data flows and is logged |
+| SR-11 | Adapters reach only their own folders, and have no access to keys, the database or evidence |
+| SR-12 | A decrypted response reaches the outtake folder only after an authorized release |
+| SR-13 | A signed response must be the approved PDF with only signature data added |
+| SR-14 | Decrypted responses never reach a validator that parses hostile files |
+
+## 3. How it works
+
+### 3.1 At a glance
 
 DXG has two flows: a request comes in, and a response goes out.
 
@@ -120,7 +164,7 @@ sequenceDiagram
 
 The columns are network zones, not machines. Each arrow points from the side that opens the connection. Both networks connect out to the DMZ, and nothing connects in to the internal network. The DMZ holds only packages with encrypted document content, and it uses a separate host for each direction.
 
-### 2.2 Request coming in
+### 3.2 Request coming in
 
 An adapter drops each request into the intake folder. Untrusted files are opened only on `ext-sanitizer`. An operator chooses what to send, each chosen file is flattened to PDF, and the internal side collects the package.
 
@@ -227,20 +271,20 @@ sequenceDiagram
 
 Steps in detail:
 
-1. **Intake.** An adapter places a complete drop in the intake folder (section 4.2). The intake worker validates it, stores the originals and their hashes in the evidence store, and removes the drop.
+1. **Intake.** An adapter places a complete drop in the intake folder (section 5.2). The intake worker validates it, stores the originals and their hashes in the evidence store, and removes the drop.
 2. **Parse.** For raw mail, `ext-sanitizer` parses the MIME structure. `ext-app` receives JSON metadata and raw parts and does no MIME parsing of its own.
-3. **Screen.** Each attachment passes the checks in section 6. Rejected items keep their evidence record and reason.
+3. **Screen.** Each attachment passes the checks in section 7. Rejected items keep their evidence record and reason.
 4. **Select.** The operator sees sender, subject, normalized body, file name, detected type, size and scan result. The console does not render attachments.
-5. **Validate.** Signed PDFs follow section 2.3.
+5. **Validate.** Signed PDFs follow section 3.3.
 6. **Flatten.** Selected items are flattened, then checked by the PDF policy (appendix F) in a restricted container on `ext-core`.
-7. **Package.** `ext-app` builds the package from section 7 and uploads it to `dmz-import`.
-8. **Receive.** `int-app` verifies the package in the order in section 7.4, stores the documents and sends an `ack`.
+7. **Package.** `ext-app` builds the package from section 8 and uploads it to `dmz-import`.
+8. **Receive.** `int-app` verifies the package in the order in section 8.4, stores the documents and sends an `ack`.
 
 If the internal side reports a rejection, or no `ack` arrives within `ACK_TIMEOUT_MINUTES`, the request is flagged for an operator to resend.
 
-### 2.3 Signed PDFs
+### 3.3 Signed PDFs
 
-This is the default behavior. The signature is validated and reported, but the file reaching the internal network is flattened and cannot be signed further. Section 12 describes the optional alternative.
+This is the default behavior. The signature is validated and reported, but the file reaching the internal network is flattened and cannot be signed further. Section 3.6 describes the optional alternative.
 
 ```mermaid
 flowchart TB
@@ -290,7 +334,7 @@ DSS returns the revision **before** the chosen signature was added. The sanitize
 | Multiple signatures | Any | Use the worst result | As above |
 | DSS unavailable | Any | Keep item queued and alert | None |
 
-### 2.4 Response going out
+### 3.4 Response going out
 
 Every response leaves as a PDF signed with a qualified certificate and a trusted timestamp. Signing comes last, because flattening a file after signing would destroy the signature. Nothing may rewrite the file after it is signed.
 
@@ -421,7 +465,7 @@ There is no manual override. If revocation data is temporarily unavailable, the 
 
 A failed check returns the response to the signer. Rewriting a PDF on save fails the append check, so the signing tool must save incrementally. A document timestamp added after signing is allowed, because it is also an appended update. It does not count as a signature.
 
-In the MVP, the signer downloads the approved PDF, signs it with an existing tool, and uploads the result. An integrated signing service can replace this later without changing the checks. Qualified signing certificates are separate from the package keys in section 3.4.
+In the MVP, the signer downloads the approved PDF, signs it with an existing tool, and uploads the result. An integrated signing service can replace this later without changing the checks. Qualified signing certificates are separate from the package keys in section 4.4.
 
 **Timestamp access.** The internal network has no internet route, so confirm how the signing tool reaches a timestamp service before phase 3.
 
@@ -431,13 +475,13 @@ In the MVP, the signer downloads the approved PDF, signs it with an existing too
 | Timestamp proxy in the DMZ | A dedicated DMZ host forwards RFC 3161 requests from signing workstations to one timestamp service | Adds a narrow outbound path that carries hashes. It needs a security review, because it is an exception to rule 2 in section 1.1 |
 | Document timestamp on the external side | The external side adds the timestamp before release | Not recommended. It proves the release time rather than the signing time, and the file would no longer be byte for byte what the internal side approved |
 
-### 2.5 Release
+### 3.5 Release
 
 ```mermaid
 stateDiagram-v2
     accDescr: State diagram of a response release on the external network
-    %% State names match responses.status in section 8.1.
-    %% Any unreleased state can expire or be superseded (section 5.5).
+    %% State names match responses.status in appendix B.1.
+    %% Any unreleased state can expire or be superseded (release rules below).
 
     [*] --> unreleased : Package verified
 
@@ -468,14 +512,14 @@ stateDiagram-v2
     closed --> [*]
 ```
 
-When an officer starts a release, `ext-release` decrypts the response and runs the checks in appendix D.4. The response must meet the signature rule in section 2.4, and a failed check blocks the release.
+When an officer starts a release, `ext-release` decrypts the response and runs the checks in appendix D.4. The response must meet the signature rule in section 3.4, and a failed check blocks the release.
 
 Release rules:
 
 - The console suggests the original sender, but the officer can choose another recipient.
 - A recipient different from the original sender needs a written reason. Domains listed in `SECOND_APPROVAL_DOMAINS`, or any domain when the list is `*`, also need a second approver.
 - Sensitive responses always need a second approver.
-- Sensitive responses use the manual channel until recipient encryption exists (section 11). `SENSITIVE_ALLOW_EMAIL` defaults to `false`.
+- Sensitive responses use the manual channel until recipient encryption exists (section 11.2). `SENSITIVE_ALLOW_EMAIL` defaults to `false`.
 - The file is delivered byte for byte. The officer cannot edit it on the external network. A correction is a new version from the internal side, and it supersedes any unreleased version.
 - A release closes the request on the external side, and the `released` status closes it on the internal side. A correction after release needs a new request.
 - The release service writes the file and `delivery.json` to the outtake folder for the chosen channel.
@@ -484,9 +528,21 @@ Release rules:
 
 Delivery status stays on the external network. Only an enumerated status (`released`, `expired`, `bounced`) goes to the internal side, as a `status` package with no free text.
 
-## 3. Components
+### 3.6 Signed PDF passthrough (reserved)
 
-### 3.1 Architecture
+An optional feature can pass an eligible incoming signed PDF to the internal network unchanged, so that it can receive more signatures and leave again. It is disabled by default, and the POC and MVP do not depend on it. Its design, risks, tests and activation steps are in the [passthrough design](document-exchange-signed-pdf-passthrough.md).
+
+The MVP does not build this feature, but it does include:
+
+- The settings `SIGNED_PDF_PASSTHROUGH_ENABLED` and `SIGNED_PDF_RETURN_ENABLED`, read as `false`
+- Rejection of `originals/` and `countersigned` responses, with `ack_reason` set to `feature_disabled`
+- The database columns in appendix B for `passthrough`, `signable`, `original_path`, `original_sha256` and `kind`
+
+Tests T-45 and T-46 prove that the disabled state holds.
+
+## 4. Components
+
+### 4.1 Architecture
 
 This diagram shows every component and allowed connection in the POC.
 
@@ -495,14 +551,14 @@ This diagram shows every component and allowed connection in the POC.
 - **Each orange box with double side borders is a VM.** The two sanitizers run Dangerzone in VMs.
 - **Rounded boxes are outside DXG**, such as services that DXG uses but does not manage.
 - **Hexagons are people** using a console.
-- **Each arrow** points from the side that opens the connection. Its label starts with the flow ID from section 4.1 and says what the connection is for.
+- **Each arrow** points from the side that opens the connection. Its label starts with the flow ID from section 5.1 and says what the connection is for.
 - **The dotted line** is the hand-off through the intake and outtake folders, which has no network connection.
 
 ```mermaid
 flowchart TB
     accDescr: Complete POC architecture showing every container, VM and allowed connection
     %% Each arrow points from the side that opens the connection.
-    %% Edge labels start with the flow ID from the matrix in section 3.4.
+    %% Edge labels start with the flow ID from the matrix in section 5.1.
     %% Solid box: container. Dashed box: stack. Double side borders: VM.
     %% Rounded box: outside service. Hexagon: people using a console.
 
@@ -570,9 +626,9 @@ flowchart TB
     style INT fill:#ebf5ec,stroke:#7fbf8a
 ```
 
-Section 3.2 describes each host, and section 4.1 gives the ports. Timestamp access for signers is not shown, because it depends on the decision in section 2.4.
+Section 4.2 describes each host, and section 5.1 gives the ports. Timestamp access for signers is not shown, because it depends on the decision in section 3.4.
 
-### 3.2 What each component does
+### 4.2 What each component does
 
 The POC runs the two sanitizers in VMs and everything else in Docker containers on one host (appendix E.8). The MVP keeps the same components and connections, but gives each component or stack its own VM, with clean snapshots and a firewall on each host. Internal and DMZ workloads run on hardware that does not also host external workloads.
 
@@ -597,7 +653,7 @@ The POC runs the two sanitizers in VMs and everything else in Docker containers 
 
 **`ext-egress`**. Squid proxy that allows only trust lists, OCSP, CRL, timestamp hosts and ClamAV updates (appendix E.4). The only outbound path for trust data. Holds no keys. Connections: F5, F10, F13 in; F6 out.
 
-**`ext-mail-adapter`** (MVP). Fetches mail over IMAP (M1) and sends released responses over SMTP (M2). No keys, no database; shares only the intake and outtake folders (section 4.2).
+**`ext-mail-adapter`** (MVP). Fetches mail over IMAP (M1) and sends released responses over SMTP (M2). No keys, no database; shares only the intake and outtake folders (section 5.2).
 
 **DMZ**
 
@@ -612,7 +668,7 @@ The POC runs the two sanitizers in VMs and everything else in Docker containers 
 
 **`int-validator`**. EU DSS with no network and a reviewed trust-list snapshot (appendix E.3). Checks signed responses before they leave. Connections: F11 in.
 
-### 3.3 Software used
+### 4.3 Software used
 
 Confirm licenses again when pinning versions.
 
@@ -633,7 +689,7 @@ Confirm licenses again when pinning versions.
 | Docker, KVM | POC hosting: containers, and VMs for the sanitizers | Not pinned | Apache-2.0 (Docker Engine), GPL-2.0 (KVM) |
 | Lidi | ANSSI software for hardware data diodes, used only for the optional diode path (section 11.2) | Current stable | LGPL-3.0 |
 
-### 3.4 Keys and certificates
+### 4.4 Keys and certificates
 
 | Key | Holder | Purpose |
 | --- | --- | --- |
@@ -663,9 +719,9 @@ Qualified certificates used to sign response PDFs are outside DXG. They are held
 | `ext-release-enc` | Expire the queue, rotate the key, and ask the internal side to reissue required responses |
 | `int-import-enc` | Treat all captured import payloads as exposed, and rotate the key |
 
-## 4. Network
+## 5. Network
 
-### 4.1 Flow matrix
+### 5.1 Flow matrix
 
 Everything not listed is denied. In the POC, Docker networks enforce these rules (appendix E.8). In the MVP, they are enforced at the zone firewall and again on each host.
 
@@ -698,7 +754,7 @@ The MVP adds these flows for the mail adapter:
 
 In the MVP, run internal and DMZ workloads on hardware that does not also host external workloads, because a shared hypervisor is a path between the networks.
 
-### 4.2 Intake and outtake folders
+### 5.2 Intake and outtake folders
 
 The pipeline starts at a folder and ends at a folder. It does not know where a request came from or how a response leaves, so a new adapter does not change the pipeline.
 
@@ -793,51 +849,9 @@ The adapter checks `expires_at` and the file hash, delivers the file, writes a r
 - In the MVP, outtake is a tmpfs mount, because it holds decrypted responses. Items older than `OUTTAKE_MAX_MINUTES` are deleted and the release moves to `failed`.
 - A watched network share is an adapter that copies files in. It is never the intake folder itself.
 
-## 5. Requirements and threat model
+## 6. Threat model and limitations
 
-### 5.1 Functional requirements
-
-| ID | Requirement |
-| --- | --- |
-| FR-01 | Accept requests only through the intake folder, and store each original unchanged |
-| FR-02 | Reject executable, script and other disallowed content without operator action |
-| FR-03 | Let an operator choose which allowed items go to the internal network, using metadata only |
-| FR-04 | Flatten selected documents to PDF, and normalize text files |
-| FR-05 | Unpack ZIP files within limits, and treat each file as a separate item |
-| FR-06 | Validate digitally signed PDFs before sanitization, and keep the original as evidence |
-| FR-07 | Give the internal side a sanitized copy, a signature status and an ETSI validation report |
-| FR-08 | Let a user on the internal network create a response linked to an open request, and have it digitally signed as a PDF |
-| FR-09 | Require a different user on the internal network to approve each response |
-| FR-10 | Deliver approved responses to a release queue on the external network without sending them automatically |
-| FR-11 | Let an authorized user on the external network choose the recipient and channel for each response |
-| FR-12 | Require a second approver on the external network for sensitive responses and for recipient exceptions that policy marks |
-| FR-13 | Support a corrected response only as a new signed version created on the internal network |
-| FR-14 | Record every decision against the request ID |
-| FR-15 | Deliver released responses only through the outtake folder |
-| FR-16 | Support new adapters without changing the pipeline |
-| FR-17 | Provide passthrough of incoming signed PDFs, and their return, as optional features disabled by default |
-| FR-18 | Deliver every response as a PDF signed with a qualified certificate and a trusted timestamp, byte for byte, with its signatures intact |
-
-### 5.2 Security requirements
-
-| ID | Requirement |
-| --- | --- |
-| SR-01 | No direct network path exists between the external and internal networks, and nothing in the DMZ or on the external network can open a connection into the internal network |
-| SR-02 | Untrusted files are parsed only in isolated hosts with no general network access |
-| SR-03 | Every package is signed by the sending side and verified by the receiving side |
-| SR-04 | Document payloads are encrypted while in the DMZ |
-| SR-05 | The internal side cannot set a recipient, subject, or mail header |
-| SR-06 | The external side cannot alter a response without detection |
-| SR-07 | Replayed or out-of-sequence packages are rejected and raise an alert |
-| SR-08 | Import and export use different DMZ hosts, accounts, keys and storage |
-| SR-09 | A valid signature never exempts a file from sanitization, unless section 12 has been activated |
-| SR-10 | Administrative access is separate from data flows and is logged |
-| SR-11 | Adapters reach only their own folders, and have no access to keys, the database or evidence |
-| SR-12 | A decrypted response reaches the outtake folder only after an authorized release |
-| SR-13 | A signed response must be the approved PDF with only signature data added |
-| SR-14 | Decrypted responses never reach a validator that parses hostile files |
-
-### 5.3 Threat model
+### 6.1 Threat model
 
 | Threat | Main control | Remaining risk |
 | --- | --- | --- |
@@ -857,11 +871,23 @@ The adapter checks `expires_at` and the file hash, delivers the file, writes a r
 | SSH client attack from DMZ | Minimal SFTP client, restricted user on `int-core`, patching | Residual risk until a hardware diode replaces the path |
 | Signed PDF manipulation | Strict DSS policy, signed revision used for sanitization | Hidden content in a signed revision is rendered as it appears in that revision |
 
-## 6. File handling policy
+### 6.2 Known limitations
+
+- **Docker POC.** All containers share one kernel, including those from both networks, so the POC must not handle real documents.
+- **Software boundary.** A firewall and DMZ are not equivalent to a hardware diode. This design is not suitable for accredited or classified use without review.
+- **Response appearance.** Flattening before signing makes responses image-based, with an OCR text layer. Recipients get a signed PDF, but not a text-native one.
+- **Fidelity.** Output is rasterized, so files can grow and lose formulas, links and text selection quality. OCR quality depends on the source and language.
+- **Spreadsheets.** Formulas and live data do not reach the internal network.
+- **Trust in the external side.** The internal side cannot revalidate the original signature. It trusts a report signed by `ext-app`.
+- **DLP.** Rule-based text scanning catches obvious leaks only. Malware could hide data inside a page image.
+- **Availability.** Every component is a single instance.
+- **Support.** No vendor support exists. Open-source licenses, including Dangerzone's AGPLv3, need legal review for your use.
+
+## 7. File handling policy
 
 The default limits for this section are in appendix A.
 
-### 6.1 Allowed input
+### 7.1 Allowed input
 
 | Detected type | Extensions | Processing | Output on the internal network |
 | --- | --- | --- | --- |
@@ -870,10 +896,10 @@ The default limits for this section are in appendix A.
 | Excel | `.xls`, `.xlsx` | Macro check, Dangerzone | Flattened PDF |
 | OpenDocument | `.odt`, `.ods` | Dangerzone | Flattened PDF |
 | Image | `.jpg`, `.jpeg`, `.png`, `.tif`, `.tiff` | Dangerzone | Flattened PDF |
-| Plain text | `.txt` | Normalization (section 6.3) | UTF-8 text |
-| ZIP | `.zip` | Unpack (section 6.4), process each file | Per file |
+| Plain text | `.txt` | Normalization (section 7.3) | UTF-8 text |
+| ZIP | `.zip` | Unpack (section 7.4), process each file | Per file |
 
-### 6.2 Rejected by default
+### 7.2 Rejected by default
 
 - Executables, libraries, installers and scripts
 - Macro-enabled Office files, and legacy Office files where `olevba` finds macros
@@ -895,7 +921,7 @@ Screening stops at the first failure and records the reason:
 
 ClamAV catches known malware early, and it is not the main protection. A clean result never bypasses sanitization.
 
-### 6.3 Text normalization
+### 7.3 Text normalization
 
 Applies to `.txt` files and email bodies.
 
@@ -907,16 +933,16 @@ Applies to `.txt` files and email bodies.
 
 For HTML-only messages, the agent extracts text and discards all markup. Links stay as plain text and are not clickable. Sender, subject and display names follow the same rules, with their own length limits, and the internal console always renders them as escaped text.
 
-### 6.4 ZIP handling
+### 7.4 ZIP handling
 
 - Reject encrypted entries, symbolic links and unsupported compression methods.
 - Enforce entry count, total size, per-file size, compression ratio and nesting limits **before** extraction, and again while reading each stream.
 - Never use the name inside the ZIP as a path. Write each member under a generated ID and keep the name as display text only.
 - Each member becomes a new item and restarts screening from step 1.
 
-## 7. Transfer packages
+## 8. Transfer packages
 
-### 7.1 Layout
+### 8.1 Layout
 
 Each package is an uncompressed tar file named `<package_id>.tar`. It may contain only these regular files:
 
@@ -934,23 +960,23 @@ Import:   manifest.json, body.txt, documents/NNNNNN.pdf, documents/NNNNNN.txt,
 Response: manifest.json, signed.pdf, reports/signature.etsi.xml
 ```
 
-Section 12 adds `originals/NNNNNN.pdf` and the `countersigned` response kind. Receivers reject both while that feature is disabled.
+The passthrough (section 3.6) adds `originals/NNNNNN.pdf` and the `countersigned` response kind. Receivers reject both while that feature is disabled.
 
 `ack` and `status` packages have no payload.
 
-### 7.2 Envelope and manifests
+### 8.2 Envelope and manifests
 
 The envelope has no recipient, subject or free-text field. `additionalProperties: false` makes that a checked rule. Appendix C.1 gives its JSON schema. `seq` increases by one per direction and is independent for each direction.
 
 Each payload carries a manifest. Appendix C.2 and C.3 show the import and response manifests.
 
-### 7.3 Signing and encryption
+### 8.3 Signing and encryption
 
 Payloads are signed first and then encrypted. The envelope is signed separately, and it carries the hash of the encrypted payload. This lets the receiver authenticate the package without decrypting it.
 
 The scripts that create, verify and open a package are in appendix C.4. The real implementation must also check that the inner signer is the same pinned certificate as the envelope signer.
 
-### 7.4 Verification order
+### 8.4 Verification order
 
 The receiver stops at the first failure, keeps the package in a rejected folder, and sends a `rejected` ack where possible.
 
@@ -968,9 +994,9 @@ The receiver stops at the first failure, keeps the package in a rejected folder,
 
 A `seq` gap puts the channel in a blocked state and alerts an operator, who decides whether to accept the gap after checking for lost packages.
 
-## 8. Operations
+## 9. Operations
 
-### 8.1 Logging and alerts
+### 9.1 Logging and alerts
 
 Send application, host, firewall and proxy logs to a log store on each side. Internal logs stay on the internal network.
 
@@ -991,7 +1017,7 @@ Send application, host, firewall and proxy logs to a log store on each side. Int
 | Outtake age | Item older than `OUTTAKE_MAX_MINUTES` |
 | Disk use | Above 80% on any data volume |
 
-### 8.2 Maintenance
+### 9.2 Maintenance
 
 | Task | Frequency | Owner |
 | --- | --- | --- |
@@ -1005,11 +1031,11 @@ Send application, host, firewall and proxy logs to a log store on each side. Int
 | `int-validator` trust-list snapshot | Within `TRUST_SNAPSHOT_MAX_DAYS` | PKI owner |
 | Access review | Quarterly | Service owner |
 
-### 8.3 Backup
+### 9.3 Backup
 
 Back up both databases, the evidence store, configuration, and the audit hash exports. Encrypt backups, and keep backups from each network separate. Never back up decrypted payloads from `/dev/shm`.
 
-### 8.4 Failure handling
+### 9.4 Failure handling
 
 | Failure | Behavior | Recovery |
 | --- | --- | --- |
@@ -1028,9 +1054,9 @@ Back up both databases, the evidence store, configuration, and the audit hash ex
 | Signature rule fails at release | Release blocked | Create a new signed version |
 | Response expires | Payload deleted on the external network, and `status` sent to the internal side | The internal side creates a new version if needed |
 
-## 9. Testing
+## 10. Testing
 
-### 9.1 Test corpus
+### 10.1 Test corpus
 
 Keep hostile samples in a controlled store on the external network only.
 
@@ -1054,18 +1080,24 @@ Keep hostile samples in a controlled store on the external network only.
 | T-16 | Same `source.reference` submitted twice | Second drop rejected |
 | T-17 | MVP: same document through `dxg-drop` and the mail adapter | Same screening result |
 
-### 9.2 Signature and transfer tests
+### 10.2 Signature tests
 
 | ID | Scenario | Expected result |
 | --- | --- | --- |
 | T-20 | Valid qualified PAdES signature | `passed`, with evidence and report stored |
-| T-21 | Expired or revoked signer | `TOTAL_FAILED` or `INDETERMINATE`, as reported by DSS, and routed by section 2.3 |
+| T-21 | Expired or revoked signer | `TOTAL_FAILED` or `INDETERMINATE`, as reported by DSS, and routed by section 3.3 |
 | T-22 | Self-signed signature | Not trusted, and routed to review |
 | T-23 | PDF changed after signing | Rejected, and the strict policy is shown to change the outcome from the default policy |
 | T-24 | Incremental update and signature wrapping samples | Rejected or sent to review |
 | T-25 | Shadow attack samples | Rejected or sent to review |
 | T-26 | Multiple signatures | Worst result used, and the latest signature's revision extracted |
 | T-27 | Signed PDF with embedded attachment | Attachment does not reach the internal network |
+| T-46 | Signed PDF while the passthrough is disabled | Only the flattened copy and report reach the internal network |
+
+### 10.3 Package and transfer tests
+
+| ID | Scenario | Expected result |
+| --- | --- | --- |
 | T-30 | Payload changed in the DMZ | Rejected by hash check |
 | T-31 | Envelope changed in the DMZ | Rejected by signature check |
 | T-32 | Package signed by a valid but unpinned certificate | Rejected |
@@ -1073,6 +1105,12 @@ Keep hostile samples in a controlled store on the external network only.
 | T-34 | Package skipped | Channel blocked, and alert raised |
 | T-35 | Tar with extra names, links or traversal | Rejected by strict reader |
 | T-36 | Envelope carrying a `recipient` field | Rejected by schema |
+| T-45 | Package containing `originals/` or a `countersigned` response while the passthrough is disabled | Rejected with `feature_disabled` |
+
+### 10.4 Workflow and release tests
+
+| ID | Scenario | Expected result |
+| --- | --- | --- |
 | T-37 | Response for a closed request | Rejected |
 | T-38 | Author approves own response | Refused by the application and the database |
 | T-39 | A user tries to change a response on the external network | No function exists, and any file change fails hash checks |
@@ -1081,10 +1119,8 @@ Keep hostile samples in a controlled store on the external network only.
 | T-42 | Expired response | Cannot be released, and payload deleted |
 | T-43 | File changed in the outtake folder before delivery | Adapter refuses, and release moves to `failed` |
 | T-44 | File placed in outtake without a release, or adapter reads another channel | Refused by permissions |
-| T-45 | Package containing `originals/` or a `countersigned` response while section 12 is disabled | Rejected with `feature_disabled` |
-| T-46 | Signed PDF while section 12 is disabled | Only the flattened copy and report reach the internal network |
 
-### 9.3 Response signing tests
+### 10.5 Response signing tests
 
 | ID | Scenario | Expected result |
 | --- | --- | --- |
@@ -1099,7 +1135,7 @@ Keep hostile samples in a controlled store on the external network only.
 | T-68 | Valid signature from a non-qualified certificate, or level `AdESig-QC` | Blocked at release |
 | T-69 | Qualified signature with no timestamp, an invalid timestamp, or a timestamp before approval | Blocked at release |
 
-### 9.4 Infrastructure and performance tests
+### 10.6 Infrastructure and performance tests
 
 | ID | Scenario | Expected result |
 | --- | --- | --- |
@@ -1111,15 +1147,17 @@ Keep hostile samples in a controlled store on the external network only.
 | T-55 | Typical documents, measured per page and per file | Baseline recorded for time and output size |
 | T-56 | Largest expected file and peak daily volume | Queue clears within the agreed time |
 
-### 9.5 MVP acceptance criteria
+### 10.7 MVP acceptance criteria
 
-- All tests in sections 9.1 to 9.4 pass, or an owner has accepted a documented exception.
+- All tests in sections 10.1 to 10.6 pass, or an owner has accepted a documented exception.
 - An independent penetration test covers the agent, package parsers, consoles and network paths, with no open critical or high findings.
 - A failed transfer can be recovered by following written procedures only.
 - A complete request can be reconstructed from audit records, from raw mail to release.
 - Named owners exist for patching, keys, allowlists, incidents and retention.
 
-## 10. Delivery plan
+## 11. Delivery plan
+
+### 11.1 Phases
 
 | Phase | Build | Exit criteria |
 | --- | --- | --- |
@@ -1128,22 +1166,8 @@ Keep hostile samples in a controlled store on the external network only.
 | 3. Response path | Internal workflow, flattening, DLP rules, approvals, PDF signing upload, `int-validator`, package signing and encryption | T-37, T-38 and T-60 to T-69 pass |
 | 4. Release console | Queue, policy rules, second approval, outtake folder | T-39 to T-44 pass |
 | 5. Hardening | Move from Docker to VMs, add the mail adapter, monitoring, backups, access review, procedures, separate hardware | T-17 and T-50 to T-56 pass |
-| 6. MVP sign-off | Independent penetration test and fixes | Section 9.5 met |
-| Optional | Signed PDF passthrough, then return, only after an activation decision | Section 12.10 met |
-
-## 11. Limitations, decisions and known issues
-
-### 11.1 Known limitations
-
-- **Docker POC.** All containers share one kernel, including those from both networks, so the POC must not handle real documents.
-- **Software boundary.** A firewall and DMZ are not equivalent to a hardware diode. This design is not suitable for accredited or classified use without review.
-- **Response appearance.** Flattening before signing makes responses image-based, with an OCR text layer. Recipients get a signed PDF, but not a text-native one.
-- **Fidelity.** Output is rasterized, so files can grow and lose formulas, links and text selection quality. OCR quality depends on the source and language.
-- **Spreadsheets.** Formulas and live data do not reach the internal network.
-- **Trust in the external side.** The internal side cannot revalidate the original signature. It trusts a report signed by `ext-app`.
-- **DLP.** Rule-based text scanning catches obvious leaks only. Malware could hide data inside a page image.
-- **Availability.** Every component is a single instance.
-- **Support.** No vendor support exists. Open-source licenses, including Dangerzone's AGPLv3, need legal review for your use.
+| 6. MVP sign-off | Independent penetration test and fixes | Section 10.7 met |
+| Optional | Signed PDF passthrough, then return, only after an activation decision | Section 9 of the [passthrough design](document-exchange-signed-pdf-passthrough.md) met |
 
 ### 11.2 Backlog
 
@@ -1153,7 +1177,7 @@ Keep hostile samples in a controlled store on the external network only.
 | Editable spreadsheet data | Extract values in the sandbox, and write a new XLSX with cells stored as text |
 | `.p7m`, `.p7s`, ASiC | Validate with DSS, extract content, and sanitize the extracted files |
 | Recipient encryption | S/MIME for known recipients, or a secure download portal |
-| More adapters | Add any option from section 4.2. Each one only reads or writes a folder |
+| More adapters | Add any option from section 5.2. Each one only reads or writes a folder |
 | More formats | Enable 7z and RAR through libarchive with the ZIP rules, render CSV to PDF, and enable other Dangerzone formats |
 | Hardware key protection | PKCS#11 tokens or HSM for release and signing keys |
 | High availability | Replicated database and multiple workers after volume justifies it |
@@ -1169,7 +1193,9 @@ Transport.delete(name)
 
 A diode implementation has no `list` or `delete` across the link, so the receiver watches a local spool and the `ack` confirms delivery. Lidi sends without acknowledgement or retransmission at the link level, so package-level acks and resends remain necessary.
 
-### 11.3 Decisions needed before the POC
+## 12. Open items
+
+### 12.1 Decisions needed before the POC
 
 | Decision | Owner |
 | --- | --- |
@@ -1181,10 +1207,10 @@ A diode implementation has no `list` or `delete` across the link, so the receive
 | Which recipients and domains need a second approver | Service owner |
 | How the signing tool reaches a trusted timestamp service from the internal network | PKI owner and network owner |
 | Whether responses need `PAdES-BASELINE-LT` or `-LTA` for long-term validation | PKI owner and records owner |
-| Whether and when to activate section 12 (not needed for the POC) | Security owner and service owner |
+| Whether and when to activate the passthrough in section 3.6 (not needed for the POC) | Security owner and service owner |
 | Whether emails containing personal data may stay in the evidence store, and for how long | Data protection owner |
 
-### 11.4 Known issues
+### 12.2 Known issues
 
 A design review left these items open. Each needs a fix or a decision before or during the POC.
 
@@ -1192,195 +1218,19 @@ High:
 
 1. **The append check covers only content streams** (appendix F.2). An update that replaces a page image or `/Resources` passes, and DSS does not see changes made in the signing update itself. This weakens SR-13.
 2. **The internal side relies on a denylist PDF check** (appendix F.1). A compromised external host could send a PDF with a hostile font or image and no forbidden key. Options: allowlist the Dangerzone output shape, or flatten imports again on `int-sanitizer`.
-3. **Timestamp access is unresolved** (section 2.4). The DMZ proxy is an exception to rule 2 in section 1.1, and the internal timestamp authority in section 12.6 would not meet `REQUIRE_QUALIFIED_TIMESTAMP`. The "signed after approval" check also needs a reliable internal clock.
-4. **The MVP mail adapter has no settled place.** Section 4.2 says the folders are not network shares and appendix E.8 makes the adapter a separate component, but appendix E.7 creates its user on `ext-core`.
+3. **Timestamp access is unresolved** (section 3.4). The DMZ proxy is an exception to rule 2 in section 1.1, and the internal timestamp authority in section 6 of the [passthrough design](document-exchange-signed-pdf-passthrough.md) would not meet `REQUIRE_QUALIFIED_TIMESTAMP`. The "signed after approval" check also needs a reliable internal clock.
+4. **The MVP mail adapter has no settled place.** Section 5.2 says the folders are not network shares and appendix E.8 makes the adapter a separate component, but appendix E.7 creates its user on `ext-core`.
 
 Medium:
 
 5. Both SFTP accounts can write the same `drop/` folder (appendix E.5), so neither DMZ host enforces its direction.
 6. `open-payload.sh` decrypts into `/dev/shm`, which Docker limits to 64 MB by default, below `MAX_PACKAGE_BYTES`.
 7. Nothing defines what happens when a package would exceed `MAX_PACKAGE_BYTES`, although a ZIP can unpack to `ZIP_MAX_TOTAL_BYTES` and flattening makes files larger.
-8. ClamAV definitions reach `ext-sanitizer` daily (section 8.2), but the agent has no command for it (appendix D.1) and the snapshot restore removes them.
+8. ClamAV definitions reach `ext-sanitizer` daily (section 9.2), but the agent has no command for it (appendix D.1) and the snapshot restore removes them.
 9. In the Compose file, `ext-release` has no database secret, no volume for encrypted responses and no socket shared with `ext-app`.
 10. Mail handling skips S/MIME, attached messages, `winmail.dat`, `.pptx`, `.rtf`, `.heic` and inline images, shows no SPF, DKIM or DMARC result, and does not say whether the suggested recipient is From or Reply-To.
 11. The `bounced` status has no source and no matching internal state.
 12. Maintenance imports into the internal network (trust-list snapshots, Dangerzone templates, OS patches) have no design.
-
-## 12. Optional signed PDF passthrough and return
-
-**This section is disabled by default.** The POC and MVP do not depend on it. Section 12.8 lists the few items the MVP must reserve, so that activating the feature later needs no change to the package format.
-
-### 12.1 Purpose
-
-By default, an incoming signed PDF reaches the internal network as a flattened copy, which removes its signature. These two options allow an eligible original to stay byte-identical, receive more signatures on the internal network, and leave again with all of its signatures intact. New responses created on the internal network do not need this section. They follow section 2.4.
-
-| Setting | Default | Effect |
-| --- | --- | --- |
-| `SIGNED_PDF_PASSTHROUGH_ENABLED` | `false` | Eligible originals go to the internal network with a flattened reading copy |
-| `SIGNED_PDF_RETURN_ENABLED` | `false` | That original, with added signatures, can leave as a `countersigned` response. Requires passthrough |
-
-Each network reads its own settings, and a side with a setting off rejects that traffic. Both sides must be on for the feature to work. Settings change only through a reviewed configuration change, are recorded in the audit log, and have no switch in the consoles.
-
-A new signature on a PDF is appended to the existing file, so this cannot work on a flattened copy. Any flattening also invalidates the earlier signatures, whichever sanitization product is used.
-
-### 12.2 Risk
-
-This is a deliberate exception to rule 1 in section 1.1 and to SR-09. It must not be activated without a written risk acceptance from the security owner.
-
-- A valid signature does not prove that a file is safe.
-- The structural checks can find active content, but they cannot prove that fonts or images are free of exploits. An unchanged file can still attack the program that opens it.
-- A returned PDF contains appended data that DLP cannot fully inspect, so it is a possible leak path.
-
-### 12.3 Eligibility at intake
-
-A PDF is eligible only when every condition is true.
-
-| Condition | Check |
-| --- | --- |
-| Passthrough is enabled on both sides | Configuration |
-| Validation result is `TOTAL_PASSED`, with full scope | DSS and the strict policy |
-| The result was not an operator override | `review_accepted` is never eligible |
-| Signer chains to an approved anchor | `SIGNED_PDF_TRUST_ANCHORS`, including any private CA |
-| No active content, attachments, or fields other than signature fields | `pdf_policy.py signed` exits `0` |
-| The document allows further signatures | `pdf_policy.py signed` exits `0`, not `2` |
-| ClamAV finds nothing | Screening |
-| Size is within `MAX_ITEM_BYTES` | Screening |
-
-A file that fails any condition follows the default path. It reaches the internal network as a flattened copy with `signable: false`, and the reason is recorded.
-
-### 12.4 Flow
-
-```mermaid
-flowchart TB
-    accDescr: Flow of the optional signed PDF passthrough and return
-
-    IN["Signed PDF at intake"] --> ELIGIBLE{"Eligible?"}
-    ELIGIBLE -->|"No"| FLAT["Flattened copy only,<br/>not signable"]
-    ELIGIBLE -->|"Yes"| SEND["Send original and<br/>flattened reading copy"]
-    SEND --> STORE["Verify hash and store<br/>original in restricted storage"]
-    STORE --> READ["Users read the<br/>flattened copy"]
-    READ --> SIGN["Signing tool adds a<br/>signature to the original"]
-    SIGN --> RETURN{"Return required?"}
-    RETURN -->|"No"| KEEP["Keep on the<br/>internal network"]
-    RETURN -->|"Yes"| INTCHECK["Internal return checks"]
-    INTCHECK -->|"Pass"| APPROVE["Flatten a review copy,<br/>run DLP, approve"]
-    INTCHECK -->|"Fail"| BLOCK["Block the response"]
-    APPROVE --> PACKAGE["Package as countersigned"]
-    PACKAGE --> EXTCHECK["External return checks<br/>at release"]
-    EXTCHECK -->|"Pass"| DELIVER["Deliver through outtake,<br/>byte for byte"]
-    EXTCHECK -->|"Fail"| BLOCK
-```
-
-### 12.5 Handling on the internal network
-
-- The original goes to restricted storage. It has no download route, and only the signing tool can open it.
-- Users read the flattened copy. It shows the signed revision, so the latest signature's visible stamp is absent, and the console shows the signer details from the report.
-- The file hash is checked before each signing action.
-- The signing tool appends a signature, and must never save the file in a way that rewrites it.
-
-Choose the signing tool when activating the feature. It must be patched, isolated and have JavaScript disabled. Options include:
-
-- An internal signing service using smart cards, tokens or an HSM
-- A locked-down desktop PDF application on a dedicated workstation
-
-### 12.6 Return checks
-
-Internal side, before approval:
-
-1. `signature_append_check.py`, with the original as its base, confirms the hash, that the file only appends to it, the size limit, at least one new signature, and unchanged page content.
-2. `pdf_policy.py signed` confirms that no active content was added. Exit `2` is accepted here, because the final signer may lock the document.
-3. DSS on `int-validator` runs with the strict policy, using internal trust anchors and a reviewed trust-list snapshot. `UndefinedChanges` and the other strict checks must pass.
-4. `int-sanitizer` flattens a copy of the returned file. DLP and the approver use this copy, and never open the signed file directly.
-5. A different user approves the response, with `kind: countersigned`.
-
-External side, at release:
-
-6. `ext-release` repeats `signature_append_check.py`, using the original from the evidence store. This does not depend on anything the internal network sends.
-7. `ext-response-validator` validates the file with current revocation data, and the internally added signature must meet the rule in section 2.4.
-8. The file is delivered byte for byte. Any correction is a new version from the internal side.
-
-The internal network has no route to a public timestamp service. If long-term validation is required, use an internal timestamp authority. Anything added on the external side would need these checks to run again, and is not part of this design.
-
-These checks limit the leak path, but they cannot prove the appended data is clean. `SIGNATURE_MAX_APPEND_BYTES` keeps it small.
-
-### 12.7 Additional components and format
-
-| Item | Purpose |
-| --- | --- |
-| Restricted original storage on `int-core` | Readable only by the signing tool and the check service |
-| Signing tool | Section 12.5. It must open the original, which the MVP signing flow does not allow |
-
-The import manifest gains these fields for each eligible document:
-
-```json
-{
-  "signable": true,
-  "original": {
-    "file": "originals/000001.pdf",
-    "sha256": "5555555555555555555555555555555555555555555555555555555555555555",
-    "bytes": 182044
-  }
-}
-```
-
-A `countersigned` response uses the manifest in appendix C.3, with the original as its base:
-
-```json
-{
-  "schema": "dxg-response/1",
-  "request_id": "0195f7a2-6f7e-7c1a-9a44-1b1f4c2e7d10",
-  "version": 1,
-  "kind": "countersigned",
-  "file": "signed.pdf",
-  "sha256": "6666666666666666666666666666666666666666666666666666666666666666",
-  "bytes": 190412,
-  "base_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
-  "base_bytes": 182044
-}
-```
-
-### 12.8 What the MVP must reserve
-
-The MVP does not build this feature, but it does include:
-
-- Both settings, read as `false`
-- Rejection of `originals/` and `countersigned` responses, with `ack_reason` set to `feature_disabled`
-- The database columns in appendix B for `passthrough`, `signable`, `original_path`, `original_sha256` and `kind`
-
-Tests T-45 and T-46 prove that the disabled state holds.
-
-### 12.9 Tests for activation
-
-| ID | Scenario | Expected result |
-| --- | --- | --- |
-| T-70 | Eligible PDF with a valid signature | Original arrives byte-identical, with a flattened copy |
-| T-71 | Signed PDF with JavaScript, attachment, link or non-signature field | Flattened copy only |
-| T-72 | Certified PDF that allows no changes, or a signature field lock | Flattened copy only, marked not signable |
-| T-73 | `review_accepted` or unapproved signer | Flattened copy only |
-| T-74 | Setting on for one side only | Package rejected with `feature_disabled` |
-| T-75 | User attempts to download the original | Refused and logged |
-| T-76 | Original changed in storage | Signing refused by hash check |
-| T-77 | Second signature added | Earlier signatures remain valid in DSS and in a PDF reader |
-| T-78 | Returned file with altered earlier bytes | Blocked as not append-only |
-| T-79 | Returned file with changed page content under a new signature | Blocked as page content changed |
-| T-80 | Returned file with appended data and no new signature | Blocked |
-| T-81 | Appended data over the size limit | Blocked |
-| T-82 | Returned file that adds JavaScript or an attachment | Blocked |
-| T-83 | Internal checks bypassed on a forged package | Blocked by the external check against the evidence store |
-| T-84 | File bytes compared after delivery | Identical to the approved file, and signatures validate |
-
-### 12.10 Activation and deactivation
-
-Before activation:
-
-1. The security owner signs the risk acceptance.
-2. The records owner confirms how signed originals are retained on both networks.
-3. The signing tool, trust anchors and limits are chosen.
-4. Restricted storage is deployed.
-5. T-70 to T-84 pass on real documents, because strict checks may reject some legitimate files.
-6. Enable passthrough first. Enable return only after passthrough has run correctly.
-
-To deactivate, set both settings to `false`. New signed PDFs then follow the default path. Originals already on the internal network stay in restricted storage until the records owner decides what to do with them.
 
 ## Appendix A. Settings and default limits
 
@@ -1410,7 +1260,7 @@ These are starting values for the POC.
 | `OUTTAKE_MAX_MINUTES` | 60 |
 | `EVIDENCE_RETENTION_DAYS` | Set by the records owner |
 
-Other settings named in this document: `ALLOW_FAILED_AS_UNSIGNED` (default `false`, section 2.3), `SECOND_APPROVAL_DOMAINS` and `SENSITIVE_ALLOW_EMAIL` (default `false`, section 2.5), `TEXT_FALLBACK_ENCODINGS` (section 6.3), and `SIGNED_PDF_PASSTHROUGH_ENABLED`, `SIGNED_PDF_RETURN_ENABLED` and `SIGNED_PDF_TRUST_ANCHORS` (section 12).
+Other settings named in this document: `ALLOW_FAILED_AS_UNSIGNED` (default `false`, section 3.3), `SECOND_APPROVAL_DOMAINS` and `SENSITIVE_ALLOW_EMAIL` (default `false`, section 3.5), `TEXT_FALLBACK_ENCODINGS` (section 7.3), and `SIGNED_PDF_PASSTHROUGH_ENABLED`, `SIGNED_PDF_RETURN_ENABLED` and `SIGNED_PDF_TRUST_ANCHORS` ([passthrough design](document-exchange-signed-pdf-passthrough.md)).
 
 ## Appendix B. Data model
 
@@ -1552,7 +1402,7 @@ For each call, it:
 3. Validates the manifest, and compares the file hash.
 4. Hashes the first `base_bytes` of the file, and compares the result with `base_sha256`.
 5. Runs `pdf_policy.py signed`, accepting exit `0` or `2`.
-6. Validates the file on `ext-response-validator`, with current revocation data, and applies the signature rule in section 2.4.
+6. Validates the file on `ext-response-validator`, with current revocation data, and applies the signature rule in section 3.4.
 7. Writes the file and `delivery.json` to the channel's outtake folder.
 8. Writes the audit event, and deletes its own plaintext copy.
 
@@ -1565,7 +1415,7 @@ The adapter's result in `outtake/results/` completes the release.
 | Item | Choice |
 | --- | --- |
 | OS | Debian 13 or Ubuntu 24.04 LTS, both listed as supported by Dangerzone |
-| Deployment | POC: Docker Compose on one host, plus two sanitizer VMs. MVP: one VM per row in section 3.2. No Kubernetes |
+| Deployment | POC: Docker Compose on one host, plus two sanitizer VMs. MVP: one VM per row in section 4.2. No Kubernetes |
 | Application | Laravel and Vue, in containers built from pinned images |
 | Database | PostgreSQL 16 or later, one instance per side |
 | Queue | PostgreSQL, using Laravel's database queue |
@@ -1672,13 +1522,13 @@ Implementation rules for these permissions:
 
 ### E.8 POC deployment with Docker
 
-The POC runs 11 containers on one Docker host with Docker Compose. The two sanitizers run in separate VMs. The `dxg/*` images are built by this project. Section 3.2 explains which containers are grouped and which must stay separate.
+The POC runs 11 containers on one Docker host with Docker Compose. The two sanitizers run in separate VMs. The `dxg/*` images are built by this project. Section 4.2 explains which containers are grouped and which must stay separate.
 
 **Compose file:** [`poc/docker-compose.yml`](poc/docker-compose.yml). Its paths, such as `./folders` and `./secrets`, are relative to `poc/`, and `.gitignore` keeps both out of the repository.
 
 **How the networks work:**
 
-- Each private network carries one allowed connection from section 4.1, or one stack's internal traffic.
+- Each private network carries one allowed connection from section 5.1, or one stack's internal traffic.
 - `internal: true` gives a network no route out of Docker. Only `outside` has one, and only `ext-egress` joins it. It holds no keys.
 - No external container shares a network with an internal one. They can reach only the DMZ containers.
 
@@ -1706,13 +1556,13 @@ Run these in a container with no network, a read-only filesystem and memory limi
 
 ### F.1 PDF policy
 
-Run `pdf_policy.py output` on the external side before packaging, and on the internal side before storing a document. Use `signed` mode for signed responses, and for section 12 if it is activated.
+Run `pdf_policy.py output` on the external side before packaging, and on the internal side before storing a document. Use `signed` mode for signed responses, and for the passthrough (section 3.6) if it is activated.
 
 Script: [`checks/pdf_policy.py`](checks/pdf_policy.py).
 
 ### F.2 Signature append check
 
-Run on every signed response, with the approved PDF as the base. Section 12 uses it with the signed original as the base.
+Run on every signed response, with the approved PDF as the base. The passthrough (section 3.6) uses it with the signed original as the base.
 
 Script: [`checks/signature_append_check.py`](checks/signature_append_check.py).
 
