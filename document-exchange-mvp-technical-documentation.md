@@ -4,7 +4,7 @@
 
 |  |  |
 | --- | --- |
-| Status | Draft, for decision by the security authority |
+| Status | Draft, for decision by the security team |
 | Date | 2026-11-04 |
 | Working name | DXG (Document Exchange Gateway) |
 | Audience | Developers, infrastructure engineers, security reviewers |
@@ -43,14 +43,14 @@ Section 2.2 turns these rules into security requirements. Section 3.6 defines on
 | TXT normalization and safe ZIP unpacking | RAR, 7z and other archive formats |
 | PAdES validation of incoming PDFs with the organisation's eSign-API, which builds on EU DSS | Validation of `.p7m`, `.p7s` and ASiC files |
 | Evidence store for originals on the external network | Long-term archival preservation |
-| Signed and encrypted packages in both directions | Hardware diode, unless the security authority requires one (section 11.2) |
+| Signed and encrypted packages in both directions | Hardware diode, unless the security team requires one (section 11.2) |
 | Carrying finished, signed PDF responses out, with signature, content and DLP checks | Composing, approving and signing a response. That happens in the composing application, through the PKI service. Also out of scope: passthrough of incoming signed PDFs, designed but disabled (section 3.6) |
 | Release console on the external network, with delivery through the outtake folder | Recipient encryption and secure download portal |
 | Audit trail linked to a request ID | High availability |
 
 ### 1.3 Assumptions
 
-- The internal network is classified. The security authority decides the architecture before implementation starts. This document is the design put to that authority, and no part of it is final until the authority has decided (section 12.1).
+- The internal network is classified. The security team decides the architecture before implementation starts. This document is the design put to that authority, and no part of it is final until the authority has decided (section 12.1).
 - PDF output is acceptable for documents that arrive as Word or Excel files.
 - Volume is low to medium. This must be measured during the POC (section 10.6).
 - The organization can run an internal CA, or issue the certificates in section 4.4.
@@ -1060,7 +1060,7 @@ Section 6.1 lists what can go wrong and what limits the damage. Section 6.2 list
 ### 6.2 Known limitations
 
 - **Docker POC.** All containers share one kernel, including those from both networks, so the POC must not handle real documents.
-- **Software boundary.** A firewall and DMZ are not equivalent to a hardware diode. The internal network is classified, so the security authority decides whether this boundary is acceptable or a hardware diode is required (section 12.1). The package format is the same with either (section 11.2).
+- **Software boundary.** A firewall and DMZ are not equivalent to a hardware diode. The internal network is classified, so the security team decides whether this boundary is acceptable or a hardware diode is required (section 12.1). The package format is the same with either (section 11.2).
 - **Response content.** DXG does not flatten responses to images, as it does incoming files. The PKI service removes forms, annotations, actions and JavaScript before the seal, but text, fonts and images stay. Content hidden inside a page, and whatever metadata the PKI service keeps, leaves with the response.
 - **Fidelity.** Output is rasterized, so files can grow and lose formulas, links and text selection quality. OCR quality depends on the source and language.
 - **Spreadsheets.** Formulas and live data do not reach the internal network.
@@ -1376,7 +1376,7 @@ Keep hostile samples in a controlled store on the external network only.
 
 ### 11.1 Phases
 
-No phase starts before the security authority has decided the architecture (section 12.1).
+No phase starts before the security team has decided the architecture (section 12.1).
 
 | Phase | Build | Exit criteria |
 | --- | --- | --- |
@@ -1436,15 +1436,15 @@ Every item in this section is open unless it is marked closed. Closed issues kee
 
 | Decision | Owner |
 | --- | --- |
-| Whether a firewall-and-DMZ boundary is acceptable for the classified internal network, or a hardware data diode is required. This decides the architecture, and implementation waits for it | Security authority |
+| Whether a firewall-and-DMZ boundary is acceptable for the classified internal network, or a hardware data diode is required. This decides the architecture, and implementation waits for it | Security team |
 | Whether a sanitized copy with a report meets record-keeping needs | Legal or records owner |
 | Retention periods for evidence, audit logs and responses, including `EVIDENCE_RETENTION_DAYS` | Records owner |
 | Which trust anchors and CAs must be supported | PKI owner |
 | What counts as a sensitive response | Service owner |
 | Which recipients and domains need a second approver | Service owner |
 | Whether responses need `PAdES-BASELINE-LT` or `-LTA` for long-term validation | PKI owner and records owner |
-| Whether and when to activate the passthrough in section 3.6 (not needed for the POC) | Security owner and service owner |
-| Whether to accept that `ext-release` trusts the approvals recorded by `ext-app` (section 6.2) | Security owner |
+| Whether and when to activate the passthrough in section 3.6 (not needed for the POC) | Security team and service owner |
+| Whether to accept that `ext-release` trusts the approvals recorded by `ext-app` (section 6.2) | Security team |
 | Whether emails containing personal data may stay in the evidence store, and for how long | Data protection owner |
 
 ### 12.2 Known issues

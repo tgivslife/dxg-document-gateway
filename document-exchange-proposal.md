@@ -6,7 +6,7 @@ Teodor Ion · 4 November 2026
 
 We ask the security team for seven decisions, listed at the end of this proposal. The last one is approval to start a proof of concept on one isolated host, with test data only.
 
-The internal network is classified, so the security authority decides the architecture before implementation starts. The first decision below is the one that settles it: whether a firewall-and-DMZ boundary is acceptable, or a hardware data diode is required.
+The internal network is classified, so the security team decides the architecture before implementation starts. The first decision below is the one that settles it: whether a firewall-and-DMZ boundary is acceptable, or a hardware data diode is required.
 
 ## The need
 
@@ -186,7 +186,7 @@ Six risks remain by design. A design review also found a number of open issues, 
 | Remaining risk | What limits it |
 | --- | --- |
 | An exploit in Dangerzone that escapes both the sandbox and the VM | The VM holds no keys and has no outbound network, it is reset daily, and the internal network checks every PDF again. |
-| A software boundary, not a hardware data diode | The internal network is classified, so the security authority decides whether this is acceptable. A hardware diode can replace the DMZ transfer without changing the package format. |
+| A software boundary, not a hardware data diode | The internal network is classified, so the security team decides whether this is acceptable. A hardware diode can replace the DMZ transfer without changing the package format. |
 | The internal network trusts signature checks made on the external side | The validation report is signed into the package, and the original stays in the evidence store. |
 | Data hidden in a response on the way out | DXG does not rebuild responses as images, as it does incoming files. The PKI service removes forms, actions and scripts before the seal, DLP reads the text, and size limits, the signatures and no recipient control on the internal network reduce the channel. |
 | One PKI service is reachable from both networks, and it reaches a cloud signature provider | DXG sends it only finished responses, never a file from the internet. Incoming files are validated on a separate instance. The service itself is outside DXG's control. The security team has accepted this. |
